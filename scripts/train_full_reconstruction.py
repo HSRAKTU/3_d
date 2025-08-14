@@ -122,7 +122,8 @@ def train_full_reconstruction(
     beta_end: float = 0.01,
     save_every: int = 1,  # Save every epoch by default 
     save_dir: str = "outputs/full_reconstruction",
-    seed: int = 42
+    seed: int = 42,
+    auto_resume: bool = True
 ):
     """
     Train PointFlow2D on full dataset for reconstruction.
@@ -140,11 +141,29 @@ def train_full_reconstruction(
         save_every: Save checkpoint every N epochs
         save_dir: Directory to save outputs
         seed: Random seed for reproducibility
+        auto_resume: Automatically resume from latest checkpoint if available
     """
     # Set reproducibility first
     worker_init_fn = set_seed(seed)
     
     logger = setup_logging()
+    
+    # Check for existing checkpoint to resume from
+    save_path = Path(save_dir)
+    latest_checkpoint_path = save_path / "latest_checkpoint.pt"
+    resume_checkpoint = None
+    start_epoch = 0
+    
+    if auto_resume and latest_checkpoint_path.exists():
+        try:
+            resume_checkpoint = torch.load(latest_checkpoint_path, map_location="cpu")
+            start_epoch = resume_checkpoint['epoch']
+            logger.info(f"🔄 Found existing checkpoint at epoch {start_epoch}")
+            logger.info(f"🔄 Resuming training from epoch {start_epoch + 1}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load checkpoint: {e}")
+            logger.info("🔄 Starting fresh training")
+            resume_checkpoint = None
     
     logger.info("🚀 POINTFLOW2D FULL RECONSTRUCTION TRAINING")
     logger.info("=" * 60)
@@ -208,6 +227,14 @@ def train_full_reconstruction(
     # Optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     
+    # Resume from checkpoint if available
+    if resume_checkpoint:
+        logger.info(f"🔄 Loading model and optimizer state from checkpoint...")
+        model.load_state_dict(resume_checkpoint['model_state_dict'])
+        optimizer.load_state_dict(resume_checkpoint['optimizer_state_dict'])
+        losses = resume_checkpoint['losses']
+        logger.info(f"✅ Resumed from epoch {start_epoch} with {len(losses['epoch'])} previous epochs")
+    
     logger.info(f"⚙️ Training configuration:")
     logger.info(f"   Epochs: {epochs}")
     logger.info(f"   Batch size: {batch_size}")
@@ -247,21 +274,24 @@ def train_full_reconstruction(
     logger.info(f"   Output directory: {save_dir}")
     
     # Training loop
-    logger.info("\n🔥 Starting training...")
-    model.train()
+    if resume_checkpoint:
+        logger.info(f"\n🔥 Resuming training from epoch {start_epoch + 1}...")
+    else:
+        logger.info("\n🔥 Starting training...")
+        losses = {
+            'epoch': [],
+            'recon_loss': [],
+            'kl_loss': [],
+            'total_loss': [],
+            'beta': []
+        }
     
-    losses = {
-        'epoch': [],
-        'recon_loss': [],
-        'kl_loss': [],
-        'total_loss': [],
-        'beta': []
-    }
+    model.train()
     
     best_recon = float('-inf')
     start_time = time.time()
     
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         epoch_start = time.time()
         
         # Beta schedule
@@ -425,6 +455,7 @@ def main():
     parser.add_argument("--save-every", type=int, default=1, help="Save every N epochs (default: 1 = save all epochs)")
     parser.add_argument("--save-dir", default="outputs/full_reconstruction", help="Save directory")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
+    parser.add_argument("--no-resume", action="store_true", help="Disable automatic resume from checkpoint")
     
     args = parser.parse_args()
     
@@ -441,7 +472,8 @@ def main():
         beta_end=args.beta_end,
         save_every=args.save_every,
         save_dir=args.save_dir,
-        seed=args.seed
+        seed=args.seed,
+        auto_resume=not args.no_resume
     )
     
     print(f"\n📋 Training Summary:")
