@@ -1,0 +1,298 @@
+{
+  "experiments": {
+    "single_slice_overfit": {
+      "description": "Single slice overfitting test to validate complete architecture",
+      "model": {
+        "latent_dim": 64,
+        "encoder_hidden_dim": 256,
+        "cnf_hidden_dim": 128,
+        "latent_cnf_hidden_dim": 128,
+        "use_latent_flow": true
+      },
+      "training": {
+        "epochs": 100,
+        "batch_size": 1,
+        "lr": 1e-3,
+        "beta_schedule": "linear",
+        "beta_start": 0.0,
+        "beta_end": 1.0
+      },
+      "validation": {
+        "validation_frequency": 5,
+        "monitoring_frequency": 10,
+        "save_frequency": 5
+      },
+      "data": {
+        "num_cars": 1,
+        "specific_slice": "DrivAer_F_D_WM_WW_1358_axis-x.npy"
+      }
+    },
+    
+    "tiny_10cars": {
+      "description": "10-car training with current 209K parameter model",
+      "model": {
+        "latent_dim": 64,
+        "encoder_hidden_dim": 256,
+        "cnf_hidden_dim": 128,
+        "latent_cnf_hidden_dim": 128,
+        "use_latent_flow": true
+      },
+      "training": {
+        "epochs": 200,
+        "batch_size": 8,
+        "lr": 1e-3,
+        "beta_schedule": "linear",
+        "beta_start": 0.0,
+        "beta_end": 1.0
+      },
+      "validation": {
+        "validation_frequency": 10,
+        "monitoring_frequency": 20,
+        "save_frequency": 10
+      },
+      "data": {
+        "num_cars": 10
+      }
+    },
+    
+    "medium_10cars": {
+      "description": "10-car training with medium 500K parameter model",
+      "model": {
+        "latent_dim": 128,
+        "encoder_hidden_dim": 512,
+        "cnf_hidden_dim": 256,
+        "latent_cnf_hidden_dim": 256,
+        "use_latent_flow": true
+      },
+      "training": {
+        "epochs": 200,
+        "batch_size": 8,
+        "lr": 2e-3,
+        "beta_schedule": "linear",
+        "beta_start": 0.0,
+        "beta_end": 1.0
+      },
+      "validation": {
+        "validation_frequency": 10,
+        "monitoring_frequency": 20,
+        "save_frequency": 10
+      },
+      "data": {
+        "num_cars": 10
+      }
+    },
+    
+    "large_50cars": {
+      "description": "50-car training with large 1M parameter model",
+      "model": {
+        "latent_dim": 128,
+        "encoder_hidden_dim": 512,
+        "cnf_hidden_dim": 512,
+        "latent_cnf_hidden_dim": 256,
+        "use_latent_flow": true
+      },
+      "training": {
+        "epochs": 500,
+        "batch_size": 16,
+        "lr": 2e-3,
+        "beta_schedule": "cosine",
+        "beta_start": 0.0,
+        "beta_end": 1.0
+      },
+      "validation": {
+        "validation_frequency": 20,
+        "monitoring_frequency": 50,
+        "save_frequency": 25
+      },
+      "data": {
+        "num_cars": 50
+      }
+    }
+  },
+  
+  "quick_tests": {
+    "debug_tiny": {
+      "description": "Quick debug with minimal model",
+      "model": {
+        "latent_dim": 32,
+        "encoder_hidden_dim": 128,
+        "cnf_hidden_dim": 64,
+        "latent_cnf_hidden_dim": 64,
+        "use_latent_flow": true
+      },
+      "training": {
+        "epochs": 20,
+        "batch_size": 4,
+        "lr": 1e-3,
+        "beta_schedule": "constant",
+        "beta_start": 0.1,
+        "beta_end": 0.1
+      },
+      "validation": {
+        "validation_frequency": 2,
+        "monitoring_frequency": 5,
+        "save_frequency": 5
+      },
+      "data": {
+        "num_cars": 1
+      }
+    },
+    
+    "fast_validation": {
+      "description": "Fast validation run to test monitoring systems",
+      "model": {
+        "latent_dim": 64,
+        "encoder_hidden_dim": 256,
+        "cnf_hidden_dim": 128,
+        "latent_cnf_hidden_dim": 128,
+        "use_latent_flow": true
+      },
+      "training": {
+        "epochs": 10,
+        "batch_size": 8,
+        "lr": 1e-3,
+        "beta_schedule": "linear",
+        "beta_start": 0.0,
+        "beta_end": 0.5
+      },
+      "validation": {
+        "validation_frequency": 1,
+        "monitoring_frequency": 2,
+        "save_frequency": 2
+      },
+      "data": {
+        "num_cars": 5
+      }
+    }
+  },
+  
+  "hyperparameter_sweeps": {
+    "latent_dim_sweep": {
+      "description": "Test different latent dimensions",
+      "base_config": "tiny_10cars",
+      "sweep_params": {
+        "model.latent_dim": [32, 64, 128, 256]
+      }
+    },
+    
+    "cnf_size_sweep": {
+      "description": "Test different CNF sizes",
+      "base_config": "tiny_10cars", 
+      "sweep_params": {
+        "model.cnf_hidden_dim": [64, 128, 256, 512],
+        "model.latent_cnf_hidden_dim": [64, 128, 256, 512]
+      }
+    },
+    
+    "learning_rate_sweep": {
+      "description": "Test different learning rates",
+      "base_config": "tiny_10cars",
+      "sweep_params": {
+        "training.lr": [5e-4, 1e-3, 2e-3, 5e-3]
+      }
+    },
+    
+    "beta_schedule_sweep": {
+      "description": "Test different beta annealing schedules",
+      "base_config": "tiny_10cars",
+      "sweep_params": {
+        "training.beta_schedule": ["constant", "linear", "cosine"],
+        "training.beta_end": [0.1, 0.5, 1.0]
+      }
+    }
+  },
+  
+  "ablation_studies": {
+    "no_latent_cnf": {
+      "description": "Ablation: disable Latent CNF to validate its necessity",
+      "model": {
+        "latent_dim": 64,
+        "encoder_hidden_dim": 256,
+        "cnf_hidden_dim": 128,
+        "latent_cnf_hidden_dim": 128,
+        "use_latent_flow": false
+      },
+      "training": {
+        "epochs": 100,
+        "batch_size": 8,
+        "lr": 1e-3,
+        "beta_schedule": "linear",
+        "beta_start": 0.0,
+        "beta_end": 1.0
+      },
+      "validation": {
+        "validation_frequency": 10,
+        "monitoring_frequency": 20,
+        "save_frequency": 10
+      },
+      "data": {
+        "num_cars": 10
+      }
+    },
+    
+    "different_encoders": {
+      "description": "Test different encoder sizes",
+      "base_config": "tiny_10cars",
+      "variants": {
+        "small_encoder": {
+          "model.encoder_hidden_dim": 128
+        },
+        "large_encoder": {
+          "model.encoder_hidden_dim": 512
+        },
+        "huge_encoder": {
+          "model.encoder_hidden_dim": 1024
+        }
+      }
+    }
+  },
+  
+  "production_configs": {
+    "runpod_single_slice": {
+      "description": "RunPod single slice validation",
+      "inherit_from": "single_slice_overfit",
+      "training": {
+        "epochs": 200,
+        "batch_size": 1
+      },
+      "validation": {
+        "validation_frequency": 5,
+        "monitoring_frequency": 10
+      }
+    },
+    
+    "runpod_10cars_baseline": {
+      "description": "RunPod 10 cars baseline",
+      "inherit_from": "tiny_10cars",
+      "training": {
+        "epochs": 300,
+        "batch_size": 16
+      }
+    },
+    
+    "runpod_10cars_scaled": {
+      "description": "RunPod 10 cars with scaled model",
+      "inherit_from": "medium_10cars",
+      "training": {
+        "epochs": 300,
+        "batch_size": 16
+      }
+    }
+  },
+  
+  "metadata": {
+    "created": "2024-08-15",
+    "purpose": "Centralized configuration for PointFlow2D experiments",
+    "usage": "python scripts/run_experiment.py --config experiments.json --experiment single_slice_overfit",
+    "parameter_counts": {
+      "tiny_model": "~209K parameters",
+      "medium_model": "~500K parameters", 
+      "large_model": "~1M parameters"
+    },
+    "success_criteria": {
+      "single_slice_overfit": "Perfect reconstruction (MSE < 1e-4, Chamfer < 1e-3)",
+      "10cars_training": "Stable training (no explosions), reasonable reconstruction quality",
+      "validation_metrics": ["reconstruction_mse", "chamfer_distance", "sampling_quality"]
+    }
+  }
+}
