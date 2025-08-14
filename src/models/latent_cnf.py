@@ -206,36 +206,15 @@ class LatentCNF(nn.Module):
         states_init = torch.cat([z, logp_init], dim=1).requires_grad_(True)
         
         # Solve ODE
-        # For M1 compatibility, move to CPU for ODE integration (MPS doesn't support float64)
         try:
-            original_device = states_init.device
-            if states_init.device.type == 'mps':
-                states_init_cpu = states_init.cpu()
-                integration_times_cpu = integration_times.cpu()
-                # Temporarily move the function to CPU
-                augmented_dynamics_cpu = AugmentedLatentDynamics(self.odefunc)
-                for param in augmented_dynamics_cpu.parameters():
-                    param.data = param.data.cpu()
-                
-                trajectory = odeint(
-                    augmented_dynamics_cpu,
-                    states_init_cpu,
-                    integration_times_cpu,
-                    atol=self.atol,
-                    rtol=self.rtol,
-                    method=self.solver
-                )
-                # Move result back to original device
-                trajectory = trajectory.to(original_device)
-            else:
-                trajectory = odeint(
-                    augmented_dynamics,
-                    states_init,
-                    integration_times,
-                    atol=self.atol,
-                    rtol=self.rtol,
-                    method=self.solver
-                )
+            trajectory = odeint(
+                augmented_dynamics,
+                states_init,
+                integration_times,
+                atol=self.atol,
+                rtol=self.rtol,
+                method=self.solver
+            )
         except Exception as e:
             logger.error(f"ODE integration failed: {e}")
             # Fallback: return input unchanged
