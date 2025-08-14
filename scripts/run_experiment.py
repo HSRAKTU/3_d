@@ -10,10 +10,11 @@ import logging
 from pathlib import Path
 from copy import deepcopy
 
-# Add src to path
+# Add src and scripts to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent))
 
-from scripts.train_with_validation import main as train_main
+from train_with_validation import main as train_main
 
 
 def load_config(config_path: str, experiment_name: str):
