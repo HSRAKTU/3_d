@@ -1,5 +1,5 @@
 # Data directories (transfer via runpodctl)
-data/
+/data/
 datasets/
 source_dataset/
 
