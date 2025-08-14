@@ -208,14 +208,35 @@ class PointFlowCNF(nn.Module):
         integration_times = torch.tensor([0.0, 1.0], device=device)
         
         # Solve ODE
-        trajectory = odeint(
-            self.odefunc,
-            states,
-            integration_times,
-            atol=self.atol,
-            rtol=self.rtol,
-            method=self.solver
-        )
+        # For M1 compatibility, move to CPU for ODE integration (MPS doesn't support float64)
+        original_device = states.device
+        if states.device.type == 'mps':
+            states_cpu = states.cpu()
+            integration_times_cpu = integration_times.cpu()
+            # Temporarily move the function to CPU
+            odefunc_cpu = PointFlowODEFunc(self.point_dim, self.context_dim, self.hidden_dim)
+            odefunc_cpu.load_state_dict(self.odefunc.state_dict())
+            odefunc_cpu = odefunc_cpu.cpu()
+            
+            trajectory = odeint(
+                odefunc_cpu,
+                states_cpu,
+                integration_times_cpu,
+                atol=self.atol,
+                rtol=self.rtol,
+                method=self.solver
+            )
+            # Move result back to original device
+            trajectory = trajectory.to(original_device)
+        else:
+            trajectory = odeint(
+                self.odefunc,
+                states,
+                integration_times,
+                atol=self.atol,
+                rtol=self.rtol,
+                method=self.solver
+            )
         
         # Extract final points
         final_states = trajectory[-1]  # (batch_size * num_points, point_dim + context_dim)
@@ -291,14 +312,35 @@ class PointFlowCNF(nn.Module):
         aug_dynamics = AugmentedDynamics(self.odefunc, self.point_dim)
         
         # Solve augmented system
-        trajectory = odeint(
-            aug_dynamics,
-            states_aug,
-            integration_times,
-            atol=self.atol,
-            rtol=self.rtol,
-            method=self.solver
-        )
+        # For M1 compatibility, move to CPU for ODE integration (MPS doesn't support float64)
+        original_device = states_aug.device
+        if states_aug.device.type == 'mps':
+            states_aug_cpu = states_aug.cpu()
+            integration_times_cpu = integration_times.cpu()
+            # Temporarily move the function to CPU
+            aug_dynamics_cpu = AugmentedDynamics(self.odefunc, self.point_dim)
+            for param in aug_dynamics_cpu.parameters():
+                param.data = param.data.cpu()
+            
+            trajectory = odeint(
+                aug_dynamics_cpu,
+                states_aug_cpu,
+                integration_times_cpu,
+                atol=self.atol,
+                rtol=self.rtol,
+                method=self.solver
+            )
+            # Move result back to original device
+            trajectory = trajectory.to(original_device)
+        else:
+            trajectory = odeint(
+                aug_dynamics,
+                states_aug,
+                integration_times,
+                atol=self.atol,
+                rtol=self.rtol,
+                method=self.solver
+            )
         
         # Extract final states and divergence
         final_states_aug = trajectory[-1]

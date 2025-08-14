@@ -536,16 +536,25 @@ def setup_validation_slice(data_dir: str,
             raise FileNotFoundError(f"No .npy files found in {data_path}")
         slice_path = slice_files[0]  # Use first file for consistency
     
-    # Load and normalize slice
+    # Load slice data
     slice_data = np.load(slice_path, allow_pickle=True)
     
+    # Handle the case where file contains multiple slices (array of slices)
+    if slice_data.dtype == object and len(slice_data.shape) == 1:
+        # File contains multiple slices, select the first one
+        actual_slice = slice_data[0]
+        logger.info(f"Loaded file with {len(slice_data)} slices, using slice 0")
+    else:
+        # File contains a single slice
+        actual_slice = slice_data
+    
     # Normalize to [-1, 1] range
-    min_coords = slice_data.min(axis=0)
-    max_coords = slice_data.max(axis=0)
-    normalized_slice = 2 * (slice_data - min_coords) / (max_coords - min_coords) - 1
+    min_coords = actual_slice.min(axis=0)
+    max_coords = actual_slice.max(axis=0)
+    normalized_slice = 2 * (actual_slice - min_coords) / (max_coords - min_coords) - 1
     
     # Convert to tensor and add batch dimension
     slice_tensor = torch.FloatTensor(normalized_slice).unsqueeze(0)
     
-    logger.info(f"Setup validation slice: {slice_path.name} ({slice_data.shape})")
+    logger.info(f"Setup validation slice: {slice_path.name} (slice shape: {actual_slice.shape})")
     return slice_tensor
