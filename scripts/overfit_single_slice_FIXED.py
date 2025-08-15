@@ -25,7 +25,7 @@ import datetime
 import json
 sys.path.append('.')
 
-from src.models.pointflow2d_final import PointFlow2DVAE
+from src.models.pointflow2d_adapted import PointFlow2DAdaptedVAE
 
 def compute_chamfer_distance(x, y):
     """Compute Chamfer distance between two point sets"""
@@ -46,14 +46,12 @@ def compute_chamfer_distance(x, y):
     
     return chamfer.item()
 
-# FIXED configuration - addressing underfitting
-LATENT_DIM = 256     # Increased from 128 - more capacity
-HIDDEN_DIM = 512     # Increased from 256 - more expressive  
-SOLVER_STEPS = 20    # Increased from 5 - higher quality
-LEARNING_RATE = 5e-4 # Slightly lower but more stable
-EPOCHS = 2000        # Longer training
+# 2D-ADAPTED configuration - optimized for 2D
+LATENT_DIM = 128     # Sufficient for 2D
+LEARNING_RATE = 1e-3 # Higher LR - simpler model trains faster
+EPOCHS = 1000        # Should converge faster with proper 2D model
 TARGET_CHAMFER = 0.001   # Target Chamfer distance for overfitting
-BATCH_SIZE = 4       # Smaller for stability with larger model
+BATCH_SIZE = 8       # Can use larger batch with simpler model
 
 def load_single_slice():
     """Load a single slice for overfitting test"""
@@ -141,27 +139,22 @@ def main():
     print(f"✓ Loaded slice with {num_points} points from: {data_path}")
     print(f"  Center: [{center[0]:.3f}, {center[1]:.3f}], Scale: {scale:.3f}")
     
-    # Create REAL PointFlow model 
-    print("\n🏗️  Building REAL PointFlow2DVAE...")
+    # Create 2D-ADAPTED PointFlow model 
+    print("\n🏗️  Building 2D-ADAPTED PointFlow...")
     print(f"  Latent dimension: {LATENT_DIM}")
-    print(f"  CNF Hidden dimension: {HIDDEN_DIM}")
-    print(f"  Solver: dopri5 (real ODE solver)")
+    print(f"  CNF Hidden dimension: 256 (2D-optimized)")
+    print(f"  Solver: euler with 10 steps (stable for 2D)")
     
-    # Full PointFlow2DVAE with proper CNF
-    model = PointFlow2DVAE(
+    # 2D-adapted PointFlow with proper but simpler CNF
+    model = PointFlow2DAdaptedVAE(
         input_dim=2,
         latent_dim=LATENT_DIM,
         encoder_hidden_dim=256,
-        cnf_hidden_dim=HIDDEN_DIM,
-        latent_cnf_hidden_dim=256,
-        use_latent_flow=False,  # Autoencoder mode for overfitting
-        cnf_solver='dopri5',
-        cnf_atol=1e-4,
-        cnf_rtol=1e-4
+        cnf_hidden_dim=256,  # Appropriate for 2D
+        solver='euler',  # More stable for 2D
+        solver_steps=10,  # Fewer steps needed for 2D
+        use_deterministic_encoder=True  # For overfitting test
     ).to(device)
-    
-    # For overfitting test, use deterministic encoder
-    model.use_deterministic_encoder = True
     
     total_params = sum(p.numel() for p in model.parameters())
     print(f"  Total parameters: {total_params:,} (REAL CNF)")
@@ -169,19 +162,11 @@ def main():
     # Optimizer
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
     
-    # Two-phase learning rate schedule
-    def lr_schedule(epoch):
-        if epoch < 800:
-            return 1.0  # Keep initial LR for 800 epochs
-        elif epoch < 1600:
-            return 0.5  # Half LR for middle phase
-        else:
-            return 0.1  # Low LR for final refinement
-    
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule)
+    # Cosine annealing for smooth convergence
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-5)
     
     # Training
-    print(f"\n🚀 Starting REAL PointFlow overfitting test (target Chamfer: {TARGET_CHAMFER})")
+    print(f"\n🚀 Starting 2D-ADAPTED PointFlow test (target Chamfer: {TARGET_CHAMFER})")
     print(f"🚀 Using batch size: {BATCH_SIZE}")
     print(f"🔍 Tracking Chamfer distance as primary metric")
     losses = []
@@ -190,14 +175,14 @@ def main():
     # Create batched target
     target_batch = target_points.unsqueeze(0).repeat(BATCH_SIZE, 1, 1)  # [B, N, 2]
     
-    pbar = tqdm(range(EPOCHS), desc="REAL PointFlow")
+    pbar = tqdm(range(EPOCHS), desc="2D-Adapted PointFlow")
     for epoch in pbar:
         # PointFlow2DVAE forward handles everything (optimizer step, backward, etc.)
         step = epoch
         metrics = model.forward(target_batch, optimizer, step, writer=None)
         
         # Track PointFlow loss for debugging
-        pointflow_loss = metrics['recon_nats']  # Normalized negative log-likelihood
+        pointflow_loss = metrics.get('recon_nats', metrics.get('loss', 0))  # Get loss metric
         
         # Compute ACTUAL reconstruction quality every 10 epochs
         if epoch % 10 == 0:
@@ -286,7 +271,7 @@ def main():
                 plt.close()
     
     # Final evaluation
-    print(f"\n📊 REAL POINTFLOW OVERFITTING RESULTS:")
+    print(f"\n📊 2D-ADAPTED POINTFLOW RESULTS:")
     print(f"  🎯 Best Chamfer achieved: {best_loss:.4f}")
     print(f"  🎯 Target Chamfer: {TARGET_CHAMFER}")
     print(f"  ✅ Success: {'✓ PASSED' if best_loss < TARGET_CHAMFER else '✗ FAILED'}")
