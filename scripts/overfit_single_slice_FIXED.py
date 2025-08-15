@@ -245,8 +245,8 @@ def main():
                 plt.yscale('log')
                 
                 # Reconstruction
-                target_np = target_points.cpu().numpy()
-                recon_np = recon.cpu().numpy()
+                target_np = target_points.detach().cpu().numpy()
+                recon_np = recon.detach().cpu().numpy()
                 
                 plt.subplot(1, 3, 2)
                 plt.scatter(target_np[:, 0], target_np[:, 1], c='blue', s=30, alpha=0.7, label='Target')
@@ -259,7 +259,7 @@ def main():
                 # Coverage analysis
                 plt.subplot(1, 3, 3)
                 dist_matrix = torch.cdist(target_points.unsqueeze(0), recon.unsqueeze(0)).squeeze(0)
-                min_distances = dist_matrix.min(dim=1)[0].cpu().numpy()
+                min_distances = dist_matrix.min(dim=1)[0].detach().cpu().numpy()
                 scatter = plt.scatter(target_np[:, 0], target_np[:, 1], c=min_distances, s=40, cmap='viridis')
                 plt.colorbar(scatter, label='Distance to Reconstruction')
                 plt.axis('equal')
