@@ -194,7 +194,7 @@ def main():
                 gaussian_blob_batch, delta_log_py = decoder(target_batch, z, reverse=False)
                 
                 # Loss: Gaussian blob should be close to N(0,I)
-                log_py = torch.distributions.Normal(0, 1).log_prob(gaussian_blob_batch).sum(dim=-1, keepdim=True)  # [B, N, 1]
+                log_py = torch.distributions.Normal(0, 1).log_prob(gaussian_blob_batch).view(BATCH_SIZE, -1).sum(1, keepdim=True)  # [B, 1]
                 delta_log_py = delta_log_py.view(BATCH_SIZE, num_points, 1).sum(1)  # [B, 1]
                 log_px = log_py - delta_log_py  # [B, 1]
                 
@@ -209,7 +209,7 @@ def main():
             gaussian_blob_batch, delta_log_py = decoder(target_batch, z, reverse=False)
             
             # Loss: Gaussian blob should be close to N(0,I)
-            log_py = torch.distributions.Normal(0, 1).log_prob(gaussian_blob_batch).sum(dim=-1, keepdim=True)
+            log_py = torch.distributions.Normal(0, 1).log_prob(gaussian_blob_batch).view(BATCH_SIZE, -1).sum(1, keepdim=True)
             delta_log_py = delta_log_py.view(BATCH_SIZE, num_points, 1).sum(1)
             log_px = log_py - delta_log_py
             
