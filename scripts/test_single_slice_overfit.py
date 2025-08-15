@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Single Slice Overfitting Test for PointFlow2D
+Single Slice Overfitting Test for PointFlow2D - FIXED VERSION
 This script tests if the architecture can learn to perfectly reconstruct a single slice.
+Includes critical fixes for stability and progress monitoring.
 """
 
 import sys
@@ -15,12 +16,17 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import logging
 from datetime import datetime
+from tqdm import tqdm
+import warnings
 
 from models.pointflow2d_final import PointFlow2DVAE
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Suppress matplotlib warnings
+warnings.filterwarnings('ignore', category=UserWarning)
 
 
 def load_single_slice(data_dir: Path, slice_name: str = None):
@@ -106,6 +112,11 @@ def compute_chamfer_distance(x, y):
     return chamfer
 
 
+def clip_grad_norm_(model, max_norm=5.0):
+    """Clip gradients to prevent explosion."""
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+
+
 def run_single_slice_overfit(
     data_dir: str,
     slice_name: str = None,
@@ -113,12 +124,15 @@ def run_single_slice_overfit(
     latent_dim: int = 64,
     cnf_hidden_dim: int = 128,
     latent_cnf_hidden_dim: int = 128,
-    learning_rate: float = 1e-3,
+    learning_rate: float = 1e-4,  # REDUCED DEFAULT!
     device: str = 'auto',
     save_freq: int = 10,
-    viz_freq: int = 50
+    viz_freq: int = 50,
+    grad_clip: float = 5.0,  # NEW: gradient clipping
+    cnf_atol: float = 1e-4,  # INCREASED tolerance
+    cnf_rtol: float = 1e-4   # INCREASED tolerance
 ):
-    """Run single slice overfitting test."""
+    """Run single slice overfitting test with stability fixes."""
     
     # Setup directories
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -144,7 +158,7 @@ def run_single_slice_overfit(
     
     logger.info(f"Points normalized: mean={points_mean.squeeze()}, std={points_std.squeeze()}")
     
-    # Create model
+    # Create model with increased ODE tolerances
     model = PointFlow2DVAE(
         input_dim=2,
         latent_dim=latent_dim,
@@ -152,11 +166,16 @@ def run_single_slice_overfit(
         cnf_hidden_dim=cnf_hidden_dim,
         latent_cnf_hidden_dim=latent_cnf_hidden_dim,
         use_latent_flow=True,
+        cnf_atol=cnf_atol,  # INCREASED tolerance
+        cnf_rtol=cnf_rtol,  # INCREASED tolerance
         force_cpu_ode=False  # Use GPU!
     ).to(device)
     
     info = model.get_model_info()
     logger.info(f"Model created: {info['total_parameters']:,} parameters")
+    logger.info(f"Using learning rate: {learning_rate}")
+    logger.info(f"Using gradient clipping: {grad_clip}")
+    logger.info(f"ODE tolerances: atol={cnf_atol}, rtol={cnf_rtol}")
     
     # Create optimizer
     class Args:
@@ -170,54 +189,129 @@ def run_single_slice_overfit(
     args = Args()
     optimizer = model.make_optimizer(args)
     
-    # Training loop
+    # Training loop with progress bar
     logger.info(f"Starting training for {epochs} epochs")
     losses = {'total': [], 'recon': [], 'prior': [], 'entropy': []}
     
-    for epoch in range(epochs):
-        # Forward pass
-        result = model.forward(points_normalized, optimizer, epoch)
-        
-        # Track losses
-        losses['recon'].append(result['recon_nats'])
-        losses['prior'].append(result['prior_nats'])
-        losses['entropy'].append(result['entropy'])
-        
-        # Log progress
-        if epoch % 10 == 0:
-            logger.info(f"Epoch {epoch:4d} | Recon: {result['recon_nats']:.6f} | "
-                       f"Prior: {result['prior_nats']:.6f} | Entropy: {result['entropy']:.3f}")
-        
-        # Visualize reconstruction
-        if epoch % viz_freq == 0 or epoch == epochs - 1:
-            with torch.no_grad():
-                # Reconstruct
-                recon_normalized = model.reconstruct(points_normalized)
-                # Denormalize
-                recon = recon_normalized * points_std + points_mean
-                
-                # Compute Chamfer distance
-                chamfer = compute_chamfer_distance(points, recon)
-                logger.info(f"Epoch {epoch}: Chamfer distance = {chamfer:.6f}")
-                
-                # Visualize
-                viz_path = visualize_progress(points, recon, epoch, output_dir)
-                logger.info(f"Saved visualization: {viz_path}")
-        
-        # Save checkpoint
-        if epoch % save_freq == 0 or epoch == epochs - 1:
-            checkpoint = {
-                'epoch': epoch,
-                'model_state': model.state_dict(),
-                'optimizer_state': optimizer.state_dict(),
-                'losses': losses,
-                'normalization': {
-                    'mean': points_mean.cpu(),
-                    'std': points_std.cpu()
+    # Create progress bar
+    pbar = tqdm(range(epochs), desc="Training", unit="epoch")
+    
+    for epoch in pbar:
+        try:
+            # Clear gradients
+            optimizer.zero_grad()
+            
+            # Forward pass with gradient computation
+            batch_size = points_normalized.size(0)
+            num_points = points_normalized.size(1)
+            
+            # Encode to get latent distribution
+            z_mu, z_sigma = model.encoder(points_normalized)
+            z = model.encoder.reparameterize(z_mu, z_sigma) if hasattr(model.encoder, 'reparameterize') else z_mu
+            
+            # Compute losses manually with error handling
+            if model.use_latent_flow and model.latent_cnf is not None:
+                w, delta_log_pw = model.latent_cnf(z, None, torch.zeros(batch_size, 1).to(z))
+                log_pw = model.standard_normal_logprob(w).view(batch_size, -1).sum(1, keepdim=True)
+                delta_log_pw = delta_log_pw.view(batch_size, 1)
+                log_pz = log_pw - delta_log_pw
+            else:
+                log_pz = model.standard_normal_logprob(z).view(batch_size, -1).sum(1, keepdim=True)
+            
+            # Compute reconstruction likelihood
+            z_new = z.view(*z.size())
+            z_new = z_new + (log_pz * 0.).mean()
+            
+            y, delta_log_py = model.point_cnf(
+                points_normalized, z_new, torch.zeros(batch_size, num_points, 1).to(points_normalized)
+            )
+            log_py = model.standard_normal_logprob(y).view(batch_size, -1).sum(1, keepdim=True)
+            delta_log_py = delta_log_py.view(batch_size, num_points, 1).sum(1)
+            log_px = log_py - delta_log_py
+            
+            # Compute entropy
+            entropy = model.gaussian_entropy(z_sigma) if hasattr(model, 'gaussian_entropy') else torch.zeros(batch_size).to(z)
+            
+            # Losses
+            entropy_loss = -entropy.mean() * model.entropy_weight
+            recon_loss = -log_px.mean() * model.recon_weight
+            prior_loss = -log_pz.mean() * model.prior_weight
+            loss = entropy_loss + prior_loss + recon_loss
+            
+            # Backward with gradient clipping
+            loss.backward()
+            
+            # CRITICAL: Clip gradients to prevent explosion
+            clip_grad_norm_(model, grad_clip)
+            
+            # Optimizer step
+            optimizer.step()
+            
+            # Track losses
+            recon_nats = recon_loss.item() / float(points_normalized.size(1) * points_normalized.size(2))
+            prior_nats = prior_loss.item() / float(model.latent_dim)
+            
+            losses['recon'].append(recon_nats)
+            losses['prior'].append(prior_nats)
+            losses['entropy'].append(entropy.mean().item())
+            
+            # Update progress bar
+            pbar.set_postfix({
+                'recon': f'{recon_nats:.4f}',
+                'prior': f'{prior_nats:.4f}',
+                'entropy': f'{entropy.mean().item():.2f}'
+            })
+            
+            # Log progress every 10 epochs
+            if epoch % 10 == 0:
+                logger.info(f"Epoch {epoch:4d} | Recon: {recon_nats:.6f} | "
+                           f"Prior: {prior_nats:.6f} | Entropy: {entropy.mean().item():.3f}")
+            
+            # Visualize reconstruction
+            if epoch % viz_freq == 0 or epoch == epochs - 1:
+                with torch.no_grad():
+                    # Reconstruct
+                    recon_normalized = model.reconstruct(points_normalized)
+                    # Denormalize
+                    recon = recon_normalized * points_std + points_mean
+                    
+                    # Compute Chamfer distance
+                    chamfer = compute_chamfer_distance(points, recon)
+                    logger.info(f"Epoch {epoch}: Chamfer distance = {chamfer:.6f}")
+                    
+                    # Visualize
+                    viz_path = visualize_progress(points, recon, epoch, output_dir)
+                    logger.info(f"Saved visualization: {viz_path}")
+            
+            # Save checkpoint
+            if epoch % save_freq == 0 or epoch == epochs - 1:
+                checkpoint = {
+                    'epoch': epoch,
+                    'model_state': model.state_dict(),
+                    'optimizer_state': optimizer.state_dict(),
+                    'losses': losses,
+                    'normalization': {
+                        'mean': points_mean.cpu(),
+                        'std': points_std.cpu()
+                    }
                 }
-            }
-            checkpoint_path = output_dir / f'checkpoint_epoch_{epoch:04d}.pt'
-            torch.save(checkpoint, checkpoint_path)
+                checkpoint_path = output_dir / f'checkpoint_epoch_{epoch:04d}.pt'
+                torch.save(checkpoint, checkpoint_path)
+                
+            # Early stopping if loss explodes
+            if recon_nats > 1e6 or np.isnan(recon_nats):
+                logger.error(f"Loss explosion detected at epoch {epoch}! Stopping training.")
+                break
+                
+        except Exception as e:
+            logger.error(f"Error at epoch {epoch}: {e}")
+            logger.error("Attempting to continue training...")
+            # Reset optimizer state if error occurs
+            optimizer = model.make_optimizer(args)
+            continue
+    
+    # Close progress bar
+    pbar.close()
     
     # Plot loss curves
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -262,7 +356,7 @@ def run_single_slice_overfit(
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description="Single slice overfitting test for PointFlow2D")
+    parser = argparse.ArgumentParser(description="Single slice overfitting test for PointFlow2D - FIXED VERSION")
     parser.add_argument("data_dir", type=str, help="Directory containing slice .npy files")
     parser.add_argument("--slice-name", type=str, default=None, 
                        help="Specific slice file name (e.g., 'DrivAer_F_D_WM_WW_1358_axis-x.npy')")
@@ -271,11 +365,14 @@ if __name__ == "__main__":
     parser.add_argument("--cnf-hidden-dim", type=int, default=128, help="CNF hidden dimension")
     parser.add_argument("--latent-cnf-hidden-dim", type=int, default=128, 
                        help="Latent CNF hidden dimension")
-    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate (default: 1e-4 for stability)")
     parser.add_argument("--device", type=str, default="auto", 
                        choices=["auto", "cpu", "cuda"], help="Device to use")
     parser.add_argument("--save-freq", type=int, default=10, help="Save checkpoint frequency")
     parser.add_argument("--viz-freq", type=int, default=50, help="Visualization frequency")
+    parser.add_argument("--grad-clip", type=float, default=5.0, help="Gradient clipping value")
+    parser.add_argument("--cnf-atol", type=float, default=1e-4, help="ODE solver absolute tolerance")
+    parser.add_argument("--cnf-rtol", type=float, default=1e-4, help="ODE solver relative tolerance")
     
     args = parser.parse_args()
     
@@ -289,5 +386,8 @@ if __name__ == "__main__":
         learning_rate=args.lr,
         device=args.device,
         save_freq=args.save_freq,
-        viz_freq=args.viz_freq
+        viz_freq=args.viz_freq,
+        grad_clip=args.grad_clip,
+        cnf_atol=args.cnf_atol,
+        cnf_rtol=args.cnf_rtol
     )

@@ -87,6 +87,10 @@ class PointFlow2DVAE(nn.Module):
         self.entropy_weight = 1.0
         self.use_deterministic_encoder = False  # We use variational encoder
         
+        # Expose utility functions as methods
+        self.standard_normal_logprob = standard_normal_logprob
+        self.gaussian_entropy = gaussian_entropy
+        
         # Encoder (PointNet2D)
         self.encoder = PointNet2DEncoder(
             input_dim=input_dim,
