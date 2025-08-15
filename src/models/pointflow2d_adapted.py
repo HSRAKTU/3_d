@@ -158,6 +158,10 @@ class PointFlow2DAdaptedCNF(nn.Module):
         """
         B, N, D = x.shape
         
+        # Ensure x requires grad for divergence computation
+        if not x.requires_grad:
+            x = x.requires_grad_(True)
+        
         # Concatenate context to points for passing through ODE
         # This is a common trick to condition CNFs
         context_expanded = context.unsqueeze(1).expand(-1, N, -1)

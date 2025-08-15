@@ -186,10 +186,10 @@ def main():
         
         # Compute ACTUAL reconstruction quality every 10 epochs
         if epoch % 10 == 0:
-            with torch.no_grad():
-                recon = model.reconstruct(target_points.unsqueeze(0)).squeeze(0)
-                chamfer_dist = compute_chamfer_distance(target_points, recon)
-                loss_val = chamfer_dist  # Track Chamfer distance as primary metric
+            # Need gradients for CNF divergence computation
+            recon = model.reconstruct(target_points.unsqueeze(0)).squeeze(0)
+            chamfer_dist = compute_chamfer_distance(target_points, recon)
+            loss_val = chamfer_dist  # Track Chamfer distance as primary metric
         else:
             loss_val = losses[-1] if losses else float('inf')  # Use previous value
         
@@ -214,17 +214,17 @@ def main():
         if epoch % 200 == 0 or epoch == EPOCHS - 1:
             print(f"\n📊 Epoch {epoch} Analysis:")
             
-            with torch.no_grad():
-                recon = model.reconstruct(target_points.unsqueeze(0)).squeeze(0)
-                
-                # Detailed metrics
-                total_loss, chamfer, coverage_loss, target_cov, pred_cov = improved_chamfer_loss(
-                    recon, target_points
-                )
-                
-                print(f"  🎯 Total Loss: {total_loss:.4f} (Chamfer: {chamfer:.4f}, Coverage: {coverage_loss:.4f})")
-                print(f"  📐 Point Coverage: Target {target_cov*100:.1f}%, Pred {pred_cov*100:.1f}%")
-                print(f"  📈 Learning Rate: {scheduler.get_last_lr()[0]:.2e}")
+            # Need gradients for CNF
+            recon = model.reconstruct(target_points.unsqueeze(0)).squeeze(0)
+            
+            # Detailed metrics
+            total_loss, chamfer, coverage_loss, target_cov, pred_cov = improved_chamfer_loss(
+                recon, target_points
+            )
+            
+            print(f"  🎯 Total Loss: {total_loss:.4f} (Chamfer: {chamfer:.4f}, Coverage: {coverage_loss:.4f})")
+            print(f"  📐 Point Coverage: Target {target_cov*100:.1f}%, Pred {pred_cov*100:.1f}%")
+            print(f"  📈 Learning Rate: {scheduler.get_last_lr()[0]:.2e}")
             
             # Save visualization
             if epoch % 400 == 0:  # Less frequent saves
@@ -277,15 +277,15 @@ def main():
     print(f"  ✅ Success: {'✓ PASSED' if best_loss < TARGET_CHAMFER else '✗ FAILED'}")
     
     # Final detailed analysis
-    with torch.no_grad():
-        final_recon = model.reconstruct(target_points.unsqueeze(0)).squeeze(0)
-        
-        total_loss, chamfer, coverage_loss, target_cov, pred_cov = improved_chamfer_loss(
-            final_recon, target_points
-        )
-        
-        print(f"  📐 Final Chamfer: {chamfer:.4f}")
-        print(f"  📈 Final Coverage: Target {target_cov*100:.1f}%, Pred {pred_cov*100:.1f}%")
+    # Need gradients for CNF
+    final_recon = model.reconstruct(target_points.unsqueeze(0)).squeeze(0)
+    
+    total_loss, chamfer, coverage_loss, target_cov, pred_cov = improved_chamfer_loss(
+        final_recon, target_points
+    )
+    
+    print(f"  📐 Final Chamfer: {chamfer:.4f}")
+    print(f"  📈 Final Coverage: Target {target_cov*100:.1f}%, Pred {pred_cov*100:.1f}%")
     
     output_dir = Path("outputs/fixed_overfit")
     output_dir.mkdir(parents=True, exist_ok=True)
