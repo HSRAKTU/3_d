@@ -137,7 +137,8 @@ class PointFlowCNF(nn.Module):
                  hidden_dim: int = 128,
                  solver: str = 'dopri5',
                  atol: float = 1e-5,
-                 rtol: float = 1e-5):
+                 rtol: float = 1e-5,
+                 force_cpu_ode: bool = False):
         """
         Initialize PointFlow CNF.
         
@@ -148,6 +149,7 @@ class PointFlowCNF(nn.Module):
             solver: ODE solver ('dopri5' as in PointFlow)
             atol: Absolute tolerance for ODE solver
             rtol: Relative tolerance for ODE solver
+            force_cpu_ode: Force ODE integration on CPU (for performance debugging)
         """
         super().__init__()
         
@@ -157,6 +159,7 @@ class PointFlowCNF(nn.Module):
         self.solver = solver
         self.atol = atol
         self.rtol = rtol
+        self.force_cpu_ode = force_cpu_ode
         
         if not TORCHDIFFEQ_AVAILABLE:
             raise ImportError("torchdiffeq is required for PointFlow CNF")
@@ -207,15 +210,40 @@ class PointFlowCNF(nn.Module):
         # Integration times
         integration_times = torch.tensor([0.0, 1.0], device=device)
         
-        # Solve ODE
-        trajectory = odeint(
-            self.odefunc,
-            states,
-            integration_times,
-            atol=self.atol,
-            rtol=self.rtol,
-            method=self.solver
-        )
+        # ODE integration with optional CPU forcing
+        if self.force_cpu_ode and device.type == 'cuda':
+            # Move to CPU for ODE integration (performance debugging)
+            states_cpu = states.cpu()
+            integration_times_cpu = integration_times.cpu()
+            
+            # Create CPU version of ODE function
+            odefunc_cpu = PointFlowODEFunc(self.point_dim, self.hidden_dim, self.context_dim)
+            odefunc_cpu.load_state_dict(self.odefunc.state_dict())
+            odefunc_cpu = odefunc_cpu.cpu()
+            
+            # Solve ODE on CPU
+            trajectory = odeint(
+                odefunc_cpu,
+                states_cpu,
+                integration_times_cpu,
+                atol=self.atol,
+                rtol=self.rtol,
+                method=self.solver
+            )
+            
+            # Move result back to original device
+            trajectory = trajectory.to(device)
+            
+        else:
+            # Standard GPU integration
+            trajectory = odeint(
+                self.odefunc,
+                states,
+                integration_times,
+                atol=self.atol,
+                rtol=self.rtol,
+                method=self.solver
+            )
         
         # Extract final points
         final_states = trajectory[-1]  # (batch_size * num_points, point_dim + context_dim)
@@ -290,15 +318,42 @@ class PointFlowCNF(nn.Module):
         
         aug_dynamics = AugmentedDynamics(self.odefunc, self.point_dim)
         
-        # Solve augmented system
-        trajectory = odeint(
-            aug_dynamics,
-            states_aug,
-            integration_times,
-            atol=self.atol,
-            rtol=self.rtol,
-            method=self.solver
-        )
+        # ODE integration with optional CPU forcing
+        if self.force_cpu_ode and device.type == 'cuda':
+            # Move to CPU for ODE integration (performance debugging)
+            states_aug_cpu = states_aug.cpu()
+            integration_times_cpu = integration_times.cpu()
+            
+            # Create CPU version of ODE function and augmented dynamics
+            odefunc_cpu = PointFlowODEFunc(self.point_dim, self.hidden_dim, self.context_dim)
+            odefunc_cpu.load_state_dict(self.odefunc.state_dict())
+            odefunc_cpu = odefunc_cpu.cpu()
+            
+            aug_dynamics_cpu = AugmentedDynamics(odefunc_cpu, self.point_dim)
+            
+            # Solve augmented system on CPU
+            trajectory = odeint(
+                aug_dynamics_cpu,
+                states_aug_cpu,
+                integration_times_cpu,
+                atol=self.atol,
+                rtol=self.rtol,
+                method=self.solver
+            )
+            
+            # Move result back to original device
+            trajectory = trajectory.to(device)
+            
+        else:
+            # Standard GPU integration
+            trajectory = odeint(
+                aug_dynamics,
+                states_aug,
+                integration_times,
+                atol=self.atol,
+                rtol=self.rtol,
+                method=self.solver
+            )
         
         # Extract final states and divergence
         final_states_aug = trajectory[-1]

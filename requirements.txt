@@ -7,7 +7,7 @@ torchaudio>=2.0.0
 torchdiffeq>=0.2.3
 
 # Scientific computing
-numpy>=1.21.0
+numpy>=1.26.4
 scipy>=1.9.0
 
 # Data handling and visualization  

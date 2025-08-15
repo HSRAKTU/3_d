@@ -39,7 +39,8 @@ class PointFlow2DVAE_Fixed(nn.Module):
                  use_latent_flow: bool = True,
                  cnf_solver: str = 'dopri5',
                  cnf_atol: float = 1e-5,
-                 cnf_rtol: float = 1e-5):
+                 cnf_rtol: float = 1e-5,
+                 force_cpu_ode: bool = False):
         """
         Initialize PointFlow2D VAE with COMPLETE architecture.
         
@@ -53,6 +54,7 @@ class PointFlow2DVAE_Fixed(nn.Module):
             cnf_solver: ODE solver for CNF
             cnf_atol: Absolute tolerance for ODE solver
             cnf_rtol: Relative tolerance for ODE solver
+            force_cpu_ode: Force ODE integration on CPU (for performance debugging)
         """
         super().__init__()
         
@@ -74,7 +76,8 @@ class PointFlow2DVAE_Fixed(nn.Module):
             hidden_dim=cnf_hidden_dim,
             solver=cnf_solver,
             atol=cnf_atol,
-            rtol=cnf_rtol
+            rtol=cnf_rtol,
+            force_cpu_ode=force_cpu_ode
         )
         
         # Latent CNF (transforms latent distribution) - MISSING PIECE!
@@ -84,7 +87,8 @@ class PointFlow2DVAE_Fixed(nn.Module):
                 hidden_dim=latent_cnf_hidden_dim,
                 solver=cnf_solver,
                 atol=cnf_atol,
-                rtol=cnf_rtol
+                rtol=cnf_rtol,
+                force_cpu_ode=force_cpu_ode
             )
         else:
             self.latent_cnf = None

@@ -307,6 +307,7 @@ def main():
     parser.add_argument("--validation-slice", type=str, default=None, help="Specific slice file for validation")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--auto-resume", action="store_true", default=True, help="Auto-resume from latest checkpoint")
+    parser.add_argument("--force-cpu-ode", action="store_true", help="Force ODE integration on CPU (performance debugging)")
     
     args = parser.parse_args()
     
@@ -345,7 +346,8 @@ def main():
         encoder_hidden_dim=args.encoder_hidden_dim,
         cnf_hidden_dim=args.cnf_hidden_dim,
         latent_cnf_hidden_dim=args.latent_cnf_hidden_dim,
-        use_latent_flow=True
+        use_latent_flow=True,
+        force_cpu_ode=args.force_cpu_ode
     ).to(device)
     
     # Log model info
@@ -355,6 +357,7 @@ def main():
     logging.info(f"  - Point CNF: {model_info['point_cnf_parameters']:,}")
     logging.info(f"  - Latent CNF: {model_info['latent_cnf_parameters']:,}")
     logging.info(f"  - Uses Latent Flow: {model_info['use_latent_flow']}")
+    logging.info(f"  - Force CPU ODE: {args.force_cpu_ode}")
     
     # Create dataset and dataloader
     logging.info(f"Loading dataset from: {args.data_dir}")

@@ -80,6 +80,10 @@ def config_to_args(config: dict, data_dir: str):
     args.extend(['--cnf-hidden-dim', str(model.get('cnf_hidden_dim', 128))])
     args.extend(['--latent-cnf-hidden-dim', str(model.get('latent_cnf_hidden_dim', 128))])
     
+    # ODE performance options
+    if model.get('force_cpu_ode', False):
+        args.append('--force-cpu-ode')
+    
     # Training parameters
     training = config.get('training', {})
     args.extend(['--epochs', str(training.get('epochs', 50))])

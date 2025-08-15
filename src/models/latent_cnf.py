@@ -141,7 +141,8 @@ class LatentCNF(nn.Module):
                  hidden_dim: int = 128,
                  solver: str = 'dopri5',
                  atol: float = 1e-5,
-                 rtol: float = 1e-5):
+                 rtol: float = 1e-5,
+                 force_cpu_ode: bool = False):
         """
         Initialize Latent CNF.
         
@@ -151,6 +152,7 @@ class LatentCNF(nn.Module):
             solver: ODE solver ('dopri5' as in PointFlow)
             atol: Absolute tolerance for ODE solver
             rtol: Relative tolerance for ODE solver
+            force_cpu_ode: Force ODE integration on CPU (for performance debugging)
         """
         super().__init__()
         
@@ -159,6 +161,7 @@ class LatentCNF(nn.Module):
         self.solver = solver
         self.atol = atol
         self.rtol = rtol
+        self.force_cpu_ode = force_cpu_ode
         
         if not TORCHDIFFEQ_AVAILABLE:
             raise ImportError("torchdiffeq is required for LatentCNF")
@@ -205,16 +208,43 @@ class LatentCNF(nn.Module):
         logp_init = torch.zeros(batch_size, 1, device=device)
         states_init = torch.cat([z, logp_init], dim=1).requires_grad_(True)
         
-        # Solve ODE
+        # ODE integration with optional CPU forcing
         try:
-            trajectory = odeint(
-                augmented_dynamics,
-                states_init,
-                integration_times,
-                atol=self.atol,
-                rtol=self.rtol,
-                method=self.solver
-            )
+            if self.force_cpu_ode and device.type == 'cuda':
+                # Move to CPU for ODE integration (performance debugging)
+                states_init_cpu = states_init.cpu()
+                integration_times_cpu = integration_times.cpu()
+                
+                # Create CPU version of ODE function and augmented dynamics
+                odefunc_cpu = LatentODEFunc(self.latent_dim, self.hidden_dim)
+                odefunc_cpu.load_state_dict(self.odefunc.state_dict())
+                odefunc_cpu = odefunc_cpu.cpu()
+                
+                augmented_dynamics_cpu = AugmentedLatentDynamics(odefunc_cpu)
+                
+                # Solve ODE on CPU
+                trajectory = odeint(
+                    augmented_dynamics_cpu,
+                    states_init_cpu,
+                    integration_times_cpu,
+                    atol=self.atol,
+                    rtol=self.rtol,
+                    method=self.solver
+                )
+                
+                # Move result back to original device
+                trajectory = trajectory.to(device)
+                
+            else:
+                # Standard GPU integration
+                trajectory = odeint(
+                    augmented_dynamics,
+                    states_init,
+                    integration_times,
+                    atol=self.atol,
+                    rtol=self.rtol,
+                    method=self.solver
+                )
         except Exception as e:
             logger.error(f"ODE integration failed: {e}")
             # Fallback: return input unchanged

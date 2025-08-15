@@ -277,6 +277,38 @@
         "epochs": 300,
         "batch_size": 16
       }
+    },
+    
+    "runpod_gpu_benchmark": {
+      "description": "RunPod performance test - GPU ODE integration",
+      "inherit_from": "tiny_10cars",
+      "model": {
+        "force_cpu_ode": false
+      },
+      "training": {
+        "epochs": 5,
+        "batch_size": 16
+      },
+      "validation": {
+        "validation_frequency": 1,
+        "monitoring_frequency": 1
+      }
+    },
+    
+    "runpod_cpu_benchmark": {
+      "description": "RunPod performance test - CPU ODE integration",
+      "inherit_from": "tiny_10cars", 
+      "model": {
+        "force_cpu_ode": true
+      },
+      "training": {
+        "epochs": 5,
+        "batch_size": 16
+      },
+      "validation": {
+        "validation_frequency": 1,
+        "monitoring_frequency": 1
+      }
     }
   },
   
