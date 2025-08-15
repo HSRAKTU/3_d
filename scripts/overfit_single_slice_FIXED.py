@@ -191,7 +191,7 @@ def main():
                 
                 # FIXED: PointFlow training - Real slice TO Gaussian blob (forward CNF)
                 # This is the correct PointFlow training direction!
-                gaussian_blob_batch, delta_log_py = decoder(target_batch, z, torch.zeros(BATCH_SIZE, num_points, 1).to(target_batch))
+                gaussian_blob_batch, delta_log_py = decoder(target_batch, z, reverse=False)
                 
                 # Loss: Gaussian blob should be close to N(0,I)
                 log_py = torch.distributions.Normal(0, 1).log_prob(gaussian_blob_batch).sum(dim=-1, keepdim=True)  # [B, N, 1]
@@ -206,7 +206,7 @@ def main():
             z = z_mu
             
             # FIXED: PointFlow training - Real slice TO Gaussian blob (forward CNF)
-            gaussian_blob_batch, delta_log_py = decoder(target_batch, z, torch.zeros(BATCH_SIZE, num_points, 1).to(target_batch))
+            gaussian_blob_batch, delta_log_py = decoder(target_batch, z, reverse=False)
             
             # Loss: Gaussian blob should be close to N(0,I)
             log_py = torch.distributions.Normal(0, 1).log_prob(gaussian_blob_batch).sum(dim=-1, keepdim=True)
