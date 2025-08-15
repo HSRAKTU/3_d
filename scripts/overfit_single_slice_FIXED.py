@@ -33,7 +33,7 @@ HIDDEN_DIM = 512     # Increased from 256 - more expressive
 SOLVER_STEPS = 20    # Increased from 5 - higher quality
 LEARNING_RATE = 5e-4 # Slightly lower but more stable
 EPOCHS = 2000        # Longer training
-TARGET_LOSS = 0.03   # More aggressive target
+TARGET_CHAMFER = 0.001   # Target Chamfer distance for overfitting
 BATCH_SIZE = 4       # Smaller for stability with larger model
 
 def load_single_slice():
@@ -162,8 +162,9 @@ def main():
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule)
     
     # Training
-    print(f"\n🚀 Starting REAL PointFlow overfitting test (target loss: {TARGET_LOSS})")
+    print(f"\n🚀 Starting REAL PointFlow overfitting test (target Chamfer: {TARGET_CHAMFER})")
     print(f"🚀 Using batch size: {BATCH_SIZE}")
+    print(f"🔍 Tracking Chamfer distance as primary metric")
     losses = []
     best_loss = float('inf')
     
@@ -176,22 +177,33 @@ def main():
         step = epoch
         metrics = model.forward(target_batch, optimizer, step, writer=None)
         
-        # Extract loss (negative reconstruction likelihood)
-        loss_val = metrics['recon_nats']  # Using normalized reconstruction loss
+        # Track PointFlow loss for debugging
+        pointflow_loss = metrics['recon_nats']  # Normalized negative log-likelihood
+        
+        # Compute ACTUAL reconstruction quality every 10 epochs
+        if epoch % 10 == 0:
+            with torch.no_grad():
+                recon = model.reconstruct(target_points.unsqueeze(0)).squeeze(0)
+                chamfer_dist = compute_chamfer_distance(target_points, recon)
+                loss_val = chamfer_dist  # Track Chamfer distance as primary metric
+        else:
+            loss_val = losses[-1] if losses else float('inf')  # Use previous value
+        
         losses.append(loss_val)
         best_loss = min(best_loss, loss_val)
         
         scheduler.step()
         
         pbar.set_postfix({
-            'loss': f'{loss_val:.4f}',
+            'chamfer': f'{loss_val:.4f}',
             'best': f'{best_loss:.4f}',
+            'pf_loss': f'{pointflow_loss:.3f}',
             'lr': f'{scheduler.get_last_lr()[0]:.1e}'
         })
         
         # Early stopping if target reached
-        if loss_val < TARGET_LOSS:
-            print(f"\n🎯 Target loss reached at epoch {epoch}!")
+        if loss_val < TARGET_CHAMFER:
+            print(f"\n🎯 Target Chamfer distance reached at epoch {epoch}!")
             break
         
         # Detailed analysis every 200 epochs
@@ -219,11 +231,11 @@ def main():
                 
                 # Loss curves
                 plt.subplot(1, 3, 1)
-                plt.plot(losses, 'b-', label='PointFlow Loss')
-                plt.axhline(y=TARGET_LOSS, color='r', linestyle='--', label=f'Target: {TARGET_LOSS}')
+                plt.plot(losses, 'b-', label='Chamfer Distance')
+                plt.axhline(y=TARGET_CHAMFER, color='r', linestyle='--', label=f'Target: {TARGET_CHAMFER}')
                 plt.xlabel('Epoch')
-                plt.ylabel('Loss (Negative Log-Likelihood)')
-                plt.title('PointFlow Training Progress')
+                plt.ylabel('Chamfer Distance')
+                plt.title('Overfitting Progress (Chamfer)')
                 plt.legend()
                 plt.grid(True)
                 plt.yscale('log')
@@ -256,9 +268,9 @@ def main():
     
     # Final evaluation
     print(f"\n📊 REAL POINTFLOW OVERFITTING RESULTS:")
-    print(f"  🎯 Best loss achieved: {best_loss:.4f}")
-    print(f"  🎯 Target loss: {TARGET_LOSS}")
-    print(f"  ✅ Success: {'✓ PASSED' if best_loss < TARGET_LOSS else '✗ FAILED'}")
+    print(f"  🎯 Best Chamfer achieved: {best_loss:.4f}")
+    print(f"  🎯 Target Chamfer: {TARGET_CHAMFER}")
+    print(f"  ✅ Success: {'✓ PASSED' if best_loss < TARGET_CHAMFER else '✗ FAILED'}")
     
     # Final detailed analysis
     with torch.no_grad():
@@ -275,14 +287,14 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Save final results
-    if best_loss < TARGET_LOSS:
+    if best_loss < TARGET_CHAMFER:
         checkpoint = {
             'model_state': model.state_dict(),
             'config': {
                 'latent_dim': LATENT_DIM,
                 'hidden_dim': HIDDEN_DIM,
                 'best_loss': best_loss,
-                'target_loss': TARGET_LOSS
+                'target_loss': TARGET_CHAMFER
             }
         }
         torch.save(checkpoint, output_dir / 'fixed_overfit_checkpoint.pth')
@@ -292,8 +304,8 @@ def main():
     metrics = {
         'losses': losses,
         'best_loss': best_loss,
-        'target_loss': TARGET_LOSS,
-        'success': best_loss < TARGET_LOSS,
+        'target_loss': TARGET_CHAMFER,
+        'success': best_loss < TARGET_CHAMFER,
         'final_chamfer': chamfer.item(),
         'final_target_coverage': target_cov.item(),
         'final_pred_coverage': pred_cov.item()
@@ -305,7 +317,7 @@ def main():
     print(f"\n✅ FIXED overfitting test complete!")
     print(f"📁 Results saved to {output_dir}/")
     
-    if best_loss < TARGET_LOSS:
+    if best_loss < TARGET_CHAMFER:
         print(f"🚀 SUCCESS: Ready for multi-slice training!")
     else:
         print(f"🔧 Still needs work: Consider even larger model or different approach")
