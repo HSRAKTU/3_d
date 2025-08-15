@@ -125,19 +125,24 @@ def main():
     # Create REAL PointFlow model 
     print("\n🏗️  Building REAL PointFlow2DVAE...")
     print(f"  Latent dimension: {LATENT_DIM}")
-    print(f"  Hidden dimension: {HIDDEN_DIM}")
+    print(f"  CNF Hidden dimension: {HIDDEN_DIM}")
     print(f"  Solver: dopri5 (real ODE solver)")
     
     # Full PointFlow2DVAE with proper CNF
     model = PointFlow2DVAE(
         input_dim=2,
         latent_dim=LATENT_DIM,
-        hidden_dim=HIDDEN_DIM,
+        encoder_hidden_dim=256,
+        cnf_hidden_dim=HIDDEN_DIM,
+        latent_cnf_hidden_dim=256,
         use_latent_flow=False,  # Autoencoder mode for overfitting
-        use_deterministic_encoder=True,
+        cnf_solver='dopri5',
         cnf_atol=1e-4,
         cnf_rtol=1e-4
     ).to(device)
+    
+    # For overfitting test, use deterministic encoder
+    model.use_deterministic_encoder = True
     
     total_params = sum(p.numel() for p in model.parameters())
     print(f"  Total parameters: {total_params:,} (REAL CNF)")
@@ -156,53 +161,27 @@ def main():
     
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule)
     
-    # Mixed precision
-    scaler = torch.cuda.amp.GradScaler() if device.type == 'cuda' else None
-    use_amp = scaler is not None
-    print(f"🚀 Mixed precision training: {'✓' if use_amp else '✗'}")
-    print(f"🚀 Using batch size: {BATCH_SIZE} (smaller for stability)")
-    
     # Training
-    print(f"\n🚀 Starting FIXED overfitting test (target loss: {TARGET_LOSS})")
+    print(f"\n🚀 Starting REAL PointFlow overfitting test (target loss: {TARGET_LOSS})")
+    print(f"🚀 Using batch size: {BATCH_SIZE}")
     losses = []
     best_loss = float('inf')
     
     # Create batched target
     target_batch = target_points.unsqueeze(0).repeat(BATCH_SIZE, 1, 1)  # [B, N, 2]
     
-    pbar = tqdm(range(EPOCHS), desc="FIXED Overfitting")
+    pbar = tqdm(range(EPOCHS), desc="REAL PointFlow")
     for epoch in pbar:
-        optimizer.zero_grad()
+        # PointFlow2DVAE forward handles everything (optimizer step, backward, etc.)
+        step = epoch
+        metrics = model.forward(target_batch, optimizer, step, writer=None)
         
-        # REAL PointFlow training using reconstruction loss
-        if use_amp:
-            with torch.cuda.amp.autocast():
-                # Use PointFlow2DVAE's reconstruction method 
-                recon_loss = model.reconstruction_loss(target_batch)
-                loss = recon_loss
-        else:
-            # Standard precision
-            recon_loss = model.reconstruction_loss(target_batch)
-            loss = recon_loss
-        
-        # Backward pass
-        if use_amp:
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-        
-        scheduler.step()
-        
-        # Track metrics
-        loss_val = loss.item()
+        # Extract loss (negative reconstruction likelihood)
+        loss_val = metrics['recon_nats']  # Using normalized reconstruction loss
         losses.append(loss_val)
         best_loss = min(best_loss, loss_val)
+        
+        scheduler.step()
         
         pbar.set_postfix({
             'loss': f'{loss_val:.4f}',
@@ -217,7 +196,7 @@ def main():
         
         # Detailed analysis every 200 epochs
         if epoch % 200 == 0 or epoch == EPOCHS - 1:
-            print(f"\n📊 Epoch {epoch} FIXED Analysis:")
+            print(f"\n📊 Epoch {epoch} Analysis:")
             
             with torch.no_grad():
                 recon = model.reconstruct(target_points.unsqueeze(0)).squeeze(0)
@@ -276,7 +255,7 @@ def main():
                 plt.close()
     
     # Final evaluation
-    print(f"\n📊 FIXED OVERFITTING RESULTS:")
+    print(f"\n📊 REAL POINTFLOW OVERFITTING RESULTS:")
     print(f"  🎯 Best loss achieved: {best_loss:.4f}")
     print(f"  🎯 Target loss: {TARGET_LOSS}")
     print(f"  ✅ Success: {'✓ PASSED' if best_loss < TARGET_LOSS else '✗ FAILED'}")
