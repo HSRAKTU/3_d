@@ -6,7 +6,8 @@
 echo "🧪 COMPREHENSIVE CNF BEHAVIOR TEST SUITE"
 echo "========================================"
 echo "This will run all tests to understand CNF behavior"
-echo "Estimated time: 15-20 minutes on GPU"
+echo "Total tests: 8"
+echo "Estimated time: 20-25 minutes on GPU"
 echo
 
 DATA_PATH="data/"
@@ -52,10 +53,24 @@ echo "✓ Solver comparison complete"
 echo
 
 # Test 6: VAE Configurations
-echo "📊 Test 6/6: Complete VAE Configuration Test"
+echo "📊 Test 6/8: Complete VAE Configuration Test"
 echo "Testing different VAE architectures..."
 python scripts/test_vae_configurations.py $DATA_PATH --slice-name $SLICE_NAME --device $DEVICE
 echo "✓ VAE configuration test complete"
+echo
+
+# Test 7: Memory Efficiency
+echo "📊 Test 7/8: Memory and Batch Processing Test"
+echo "Testing memory usage and batch capabilities..."
+python scripts/test_memory_efficiency.py $DATA_PATH --slice-name $SLICE_NAME --device $DEVICE
+echo "✓ Memory efficiency test complete"
+echo
+
+# Test 8: Slice Diversity
+echo "📊 Test 8/8: Slice Diversity Test"
+echo "Testing on different types of slices..."
+python scripts/test_slice_diversity.py $DATA_PATH --device $DEVICE
+echo "✓ Slice diversity test complete"
 echo
 
 # Generate summary report
@@ -71,4 +86,6 @@ echo "  - outputs/integration_test/"
 echo "  - outputs/scalability_test/"
 echo "  - outputs/solver_comparison/"
 echo "  - outputs/vae_configurations/"
+echo "  - outputs/memory_efficiency/"
+echo "  - outputs/slice_diversity/"
 echo "  - outputs/test_suite_results/summary_report.md"

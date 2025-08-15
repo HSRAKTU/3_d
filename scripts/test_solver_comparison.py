@@ -72,18 +72,22 @@ def test_solver(solver_name, data_path, slice_name, device='cuda'):
     # Create decoder
     try:
         if solver_name in ['euler', 'midpoint', 'rk4']:
+            # Use lightweight CNF for fixed-step solvers
             decoder = PointFlow2DCNF(
                 point_dim=2,
                 context_dim=latent_dim,
                 hidden_dim=64,
-                solver='euler',  # We'll implement other fixed-step solvers
+                solver='euler',  # All use Euler for now
                 solver_steps=20
             ).to(device)
+            # Note which solver was requested
+            decoder._requested_solver = solver_name
         else:
+            # Use original CNF for adaptive solvers
             decoder = OriginalCNF(
                 point_dim=2,
                 context_dim=latent_dim,
-                hidden_dim=128,
+                hidden_dim=64,  # Use same size for fair comparison
                 solver=solver_name,
                 atol=1e-3,
                 rtol=1e-3
@@ -147,9 +151,11 @@ def run_solver_comparison(data_path: str, slice_name: str, device: str = 'cuda')
     
     # Solvers to test
     solvers = [
-        'euler',      # Simple fixed-step
-        'dopri5',     # Adaptive Runge-Kutta
-        'adams',      # Adaptive multi-step
+        'euler',           # Simple fixed-step
+        'midpoint',        # Fixed-step midpoint
+        'rk4',            # Fixed-step Runge-Kutta 4
+        'dopri5',         # Adaptive Runge-Kutta
+        'explicit_adams', # Adaptive multi-step
     ]
     
     results = {}

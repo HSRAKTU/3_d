@@ -45,10 +45,10 @@ class SimpleVAE(nn.Module):
         if use_latent_cnf:
             self.latent_cnf = LatentCNF(
                 latent_dim=latent_dim,
-                hidden_dim=64,
-                solver='dopri5',
-                atol=1e-3,
-                rtol=1e-3
+                hidden_dim=32,  # Smaller for faster testing
+                solver='euler',  # Use euler for speed
+                atol=1e-2,      # Relaxed tolerances
+                rtol=1e-2
             )
         
         self.latent_dim = latent_dim
