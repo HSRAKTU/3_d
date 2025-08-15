@@ -173,8 +173,6 @@ def main():
     # Training
     print(f"\n🚀 Starting FIXED overfitting test (target loss: {TARGET_LOSS})")
     losses = []
-    chamfer_losses = []
-    coverage_losses = []
     best_loss = float('inf')
     
     # Create batched target
@@ -191,46 +189,32 @@ def main():
                 z_mu, z_logvar = encoder(target_batch)
                 z = z_mu  # Deterministic for overfitting
                 
-                # Decode
-                reconstructed_batch = decoder.sample(z, num_points)
+                # FIXED: PointFlow training - Real slice TO Gaussian blob (forward CNF)
+                # This is the correct PointFlow training direction!
+                gaussian_blob_batch, delta_log_py = decoder(target_batch, z, torch.zeros(BATCH_SIZE, num_points, 1).to(target_batch))
                 
-                # Improved loss computation
-                batch_losses = []
-                batch_chamfer = []
-                batch_coverage = []
+                # Loss: Gaussian blob should be close to N(0,I)
+                log_py = torch.distributions.Normal(0, 1).log_prob(gaussian_blob_batch).sum(dim=-1, keepdim=True)  # [B, N, 1]
+                delta_log_py = delta_log_py.view(BATCH_SIZE, num_points, 1).sum(1)  # [B, 1]
+                log_px = log_py - delta_log_py  # [B, 1]
                 
-                for i in range(BATCH_SIZE):
-                    total_loss, chamfer, coverage_loss, target_cov, pred_cov = improved_chamfer_loss(
-                        reconstructed_batch[i], target_batch[i]
-                    )
-                    batch_losses.append(total_loss)
-                    batch_chamfer.append(chamfer)
-                    batch_coverage.append(coverage_loss)
-                
-                loss = torch.stack(batch_losses).mean()
-                chamfer_loss = torch.stack(batch_chamfer).mean()
-                coverage_loss_val = torch.stack(batch_coverage).mean()
+                # PointFlow loss: negative log likelihood
+                loss = -log_px.mean()
         else:
             # Standard precision fallback
             z_mu, z_logvar = encoder(target_batch)
             z = z_mu
-            reconstructed_batch = decoder.sample(z, num_points)
             
-            batch_losses = []
-            batch_chamfer = []
-            batch_coverage = []
+            # FIXED: PointFlow training - Real slice TO Gaussian blob (forward CNF)
+            gaussian_blob_batch, delta_log_py = decoder(target_batch, z, torch.zeros(BATCH_SIZE, num_points, 1).to(target_batch))
             
-            for i in range(BATCH_SIZE):
-                total_loss, chamfer, coverage_loss, target_cov, pred_cov = improved_chamfer_loss(
-                    reconstructed_batch[i], target_batch[i]
-                )
-                batch_losses.append(total_loss)
-                batch_chamfer.append(chamfer)
-                batch_coverage.append(coverage_loss)
+            # Loss: Gaussian blob should be close to N(0,I)
+            log_py = torch.distributions.Normal(0, 1).log_prob(gaussian_blob_batch).sum(dim=-1, keepdim=True)
+            delta_log_py = delta_log_py.view(BATCH_SIZE, num_points, 1).sum(1)
+            log_px = log_py - delta_log_py
             
-            loss = torch.stack(batch_losses).mean()
-            chamfer_loss = torch.stack(batch_chamfer).mean()
-            coverage_loss_val = torch.stack(batch_coverage).mean()
+            # PointFlow loss: negative log likelihood
+            loss = -log_px.mean()
         
         # Backward pass
         if use_amp:
@@ -248,18 +232,11 @@ def main():
         
         # Track metrics
         loss_val = loss.item()
-        chamfer_val = chamfer_loss.item()
-        coverage_val = coverage_loss_val.item()
-        
         losses.append(loss_val)
-        chamfer_losses.append(chamfer_val)
-        coverage_losses.append(coverage_val)
         best_loss = min(best_loss, loss_val)
         
         pbar.set_postfix({
             'loss': f'{loss_val:.4f}',
-            'chamfer': f'{chamfer_val:.4f}',
-            'coverage': f'{coverage_val:.3f}',
             'best': f'{best_loss:.4f}',
             'lr': f'{scheduler.get_last_lr()[0]:.1e}'
         })
@@ -296,13 +273,11 @@ def main():
                 
                 # Loss curves
                 plt.subplot(1, 3, 1)
-                plt.plot(losses, 'b-', label='Total Loss')
-                plt.plot(chamfer_losses, 'r-', label='Chamfer')
-                plt.plot(coverage_losses, 'g-', label='Coverage')
+                plt.plot(losses, 'b-', label='PointFlow Loss')
                 plt.axhline(y=TARGET_LOSS, color='r', linestyle='--', label=f'Target: {TARGET_LOSS}')
                 plt.xlabel('Epoch')
-                plt.ylabel('Loss')
-                plt.title('Training Progress')
+                plt.ylabel('Loss (Negative Log-Likelihood)')
+                plt.title('PointFlow Training Progress')
                 plt.legend()
                 plt.grid(True)
                 plt.yscale('log')
