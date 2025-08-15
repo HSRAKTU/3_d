@@ -109,7 +109,7 @@ def main():
     
     # Encoder
     encoder = PointNet2DEncoder(
-        point_dim=2,
+        input_dim=2,
         hidden_dim=128,
         latent_dim=LATENT_DIM
     ).to(device)
