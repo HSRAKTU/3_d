@@ -110,17 +110,15 @@ class AugmentedLatentDynamics(nn.Module):
             # Compute dz/dt
             dz_dt = self.odefunc(t, z)
             
-            # Compute divergence using exact method (not trace estimation)
-            # For latent CNF, compute exact divergence since latent_dim is manageable
-            divergence = 0
-            for i in range(z_dim):
-                grad_output = torch.autograd.grad(
-                    dz_dt[:, i].sum(), 
-                    z,
-                    create_graph=True,
-                    retain_graph=True
-                )[0]
-                divergence += grad_output[:, i]
+            # Compute divergence using Hutchinson trace estimation (like PointFlow)
+            # Much faster than exact computation
+            batch_size = z.shape[0]
+            e = torch.randn_like(z)
+            e_dz_dt = torch.sum(e * dz_dt)
+            grad_e_dz_dt = torch.autograd.grad(
+                e_dz_dt, z, create_graph=True, retain_graph=True
+            )[0]
+            divergence = torch.sum(grad_e_dz_dt * e, dim=1)
             
             # dlogp/dt = -divergence
             dlogp_dt = -divergence.unsqueeze(1)
@@ -179,12 +177,18 @@ class LatentCNF(nn.Module):
     
     def forward(self, 
                 z: torch.Tensor,
+                context: Optional[torch.Tensor] = None,
+                logpz: Optional[torch.Tensor] = None,
+                integration_times: Optional[torch.Tensor] = None,
                 reverse: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Forward pass through Latent CNF.
+        Forward pass through Latent CNF - EXACTLY matching original PointFlow CNF interface.
         
         Args:
             z: Input latent codes, shape (batch_size, latent_dim)
+            context: Context (unused for latent CNF)
+            logpz: Initial log probability (if None, uses zeros)
+            integration_times: Custom integration times (if None, uses default)
             reverse: If True, transform w→z; if False, transform z→w
             
         Returns:
@@ -193,27 +197,33 @@ class LatentCNF(nn.Module):
         batch_size = z.shape[0]
         device = z.device
         
-        # Integration times
-        if reverse:
-            # w ~ N(0,1) → z (complex distribution)
-            integration_times = torch.tensor([0.0, 1.0], device=device)
-        else:
-            # z (complex distribution) → w ~ N(0,1)  
-            integration_times = torch.tensor([1.0, 0.0], device=device)
+        # Use provided logpz or default to zeros
+        if logpz is None:
+            logpz = torch.zeros(batch_size, 1, device=z.device)
         
+        # Integration times (use provided or default)
+        if integration_times is None:
+            if reverse:
+                # w ~ N(0,1) → z (complex distribution)
+                _integration_times = torch.tensor([1.0, 0.0], device=device)
+            else:
+                # z (complex distribution) → w ~ N(0,1)  
+                _integration_times = torch.tensor([0.0, 1.0], device=device)
+        else:
+            _integration_times = integration_times
+
         # Augmented system for log probability computation
         augmented_dynamics = AugmentedLatentDynamics(self.odefunc)
         
         # Initial state: [z, logp] - ensure it requires gradients
-        logp_init = torch.zeros(batch_size, 1, device=device)
-        states_init = torch.cat([z, logp_init], dim=1).requires_grad_(True)
-        
+        states_init = torch.cat([z, logpz], dim=1)
+
         # ODE integration with optional CPU forcing
         try:
             if self.force_cpu_ode and device.type == 'cuda':
                 # Move to CPU for ODE integration (performance debugging)
                 states_init_cpu = states_init.cpu()
-                integration_times_cpu = integration_times.cpu()
+                integration_times_cpu = _integration_times.cpu()
                 
                 # Create CPU version of ODE function and augmented dynamics
                 odefunc_cpu = LatentODEFunc(self.latent_dim, self.hidden_dim)
@@ -240,7 +250,7 @@ class LatentCNF(nn.Module):
                 trajectory = odeint(
                     augmented_dynamics,
                     states_init,
-                    integration_times,
+                    _integration_times,
                     atol=self.atol,
                     rtol=self.rtol,
                     method=self.solver
@@ -248,16 +258,16 @@ class LatentCNF(nn.Module):
         except Exception as e:
             logger.error(f"ODE integration failed: {e}")
             # Fallback: return input unchanged
-            return z, torch.zeros(batch_size, device=device)
+            return z, torch.zeros(batch_size, 1, device=device)
         
         # Extract final state
         final_state = trajectory[-1]  # Shape: (batch_size, latent_dim + 1)
         
         # Split output and log probability
         output = final_state[:, :self.latent_dim]
-        log_prob = final_state[:, self.latent_dim]
+        final_logp = final_state[:, self.latent_dim:]  # Keep as column vector to match original interface
         
-        return output, log_prob
+        return output, final_logp
     
     def sample(self, 
                batch_size: int,

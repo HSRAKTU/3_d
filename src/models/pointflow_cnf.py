@@ -376,22 +376,74 @@ class PointFlowCNF(nn.Module):
     
     def forward(self, 
                 points: torch.Tensor, 
-                context: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+                context: Optional[torch.Tensor] = None,
+                logpx: Optional[torch.Tensor] = None,
+                integration_times: Optional[torch.Tensor] = None,
+                reverse: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Forward pass computing both transformed points and log probability.
+        Forward pass - EXACTLY matching original PointFlow CNF interface.
         
         Args:
             points: Input points, shape (batch_size, num_points, point_dim)
-            context: Conditioning context, shape (batch_size, context_dim)
+            context: Conditioning context, shape (batch_size, context_dim) 
+            logpx: Initial log probability, shape (batch_size, num_points, 1)
+            integration_times: Custom integration times (unused)
+            reverse: If True, sample from noise; if False, compute log_prob
             
         Returns:
-            (transformed_points, log_prob)
+            (output, delta_log): Transformed points and log probability change
         """
-        # For training, we typically compute log_prob of the input points
-        log_prob = self.log_prob(points, context)
+        batch_size, num_points = points.shape[:2]
         
-        # Return input points and their log probability
-        return points, log_prob
+        if context is None:
+            # Create a dummy context if not provided.
+            context = torch.zeros(batch_size, self.context_dim, device=points.device)
+
+        if reverse:
+            # Reverse mode: transform noise to points (for sampling)
+            return self.sample(context, num_points), torch.zeros(batch_size, num_points, 1).to(points)
+        else:
+            # Forward mode: compute log probability (for training)
+            # This is what the original PointFlow training expects
+            
+            # Use logpx if provided, otherwise compute fresh
+            if logpx is None:
+                logpx = torch.zeros(batch_size, num_points, 1).to(points)
+            
+            # Transform points to noise and compute log probability change
+            log_prob_val = self.log_prob(points, context)  # (batch_size, num_points)
+            delta_log = log_prob_val.unsqueeze(2) - logpx  # Change in log prob
+            
+            # We need to compute the transformation z -> w to return the latent representation
+            # This requires a forward integration from t=0 to t=1
+            
+            # Expand context for all points
+            context_expanded = context.unsqueeze(1).expand(-1, num_points, -1)
+            
+            # Flatten for ODE integration
+            points_flat = points.view(batch_size * num_points, self.point_dim)
+            context_flat = context_expanded.contiguous().view(batch_size * num_points, self.context_dim)
+            
+            # Combine state
+            states = torch.cat([points_flat, context_flat], dim=1)
+            
+            # Integration times
+            integration_times_fwd = torch.tensor([0.0, 1.0], device=points.device)
+            
+            # Solve ODE
+            trajectory = odeint(
+                self.odefunc,
+                states,
+                integration_times_fwd,
+                atol=self.atol,
+                rtol=self.rtol,
+                method=self.solver,
+            )
+            
+            final_states = trajectory[-1]
+            noise = final_states[:, :self.point_dim].view(batch_size, num_points, self.point_dim)
+            
+            return noise, delta_log
 
 
 def main():
