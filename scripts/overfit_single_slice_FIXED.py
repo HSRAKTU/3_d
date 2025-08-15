@@ -27,6 +27,25 @@ sys.path.append('.')
 
 from src.models.pointflow2d_final import PointFlow2DVAE
 
+def compute_chamfer_distance(x, y):
+    """Compute Chamfer distance between two point sets"""
+    x_expanded = x.unsqueeze(1)  # [N, 1, 2]
+    y_expanded = y.unsqueeze(0)  # [1, M, 2]
+    
+    # Compute all pairwise distances
+    distances = torch.norm(x_expanded - y_expanded, dim=2)  # [N, M]
+    
+    # For each point in x, find closest point in y
+    min_dist_x_to_y = distances.min(dim=1)[0]  # [N]
+    
+    # For each point in y, find closest point in x  
+    min_dist_y_to_x = distances.min(dim=0)[0]  # [M]
+    
+    # Chamfer distance is sum of both directions
+    chamfer = min_dist_x_to_y.mean() + min_dist_y_to_x.mean()
+    
+    return chamfer.item()
+
 # FIXED configuration - addressing underfitting
 LATENT_DIM = 256     # Increased from 128 - more capacity
 HIDDEN_DIM = 512     # Increased from 256 - more expressive  
