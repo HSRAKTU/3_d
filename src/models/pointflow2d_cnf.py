@@ -134,8 +134,40 @@ class PointFlow2DCNF(nn.Module):
                 context = torch.zeros(batch_size, self.context_dim, device=points.device)
             return self.sample(context, num_points), torch.zeros(batch_size, num_points, 1).to(points)
         else:
-            # Encode mode (not implemented for lightweight version)
-            raise NotImplementedError("Lightweight CNF only supports generation")
+            # Forward mode - transform real points to Gaussian
+            batch_size, num_points = points.shape[:2]
+            if context is None:
+                context = torch.zeros(batch_size, self.context_dim, device=points.device)
+            
+            # Expand context 
+            ctx_exp = context.unsqueeze(1).expand(-1, num_points, -1)
+            
+            # Flatten
+            points_flat = points.view(-1, self.point_dim)
+            ctx_flat = ctx_exp.reshape(-1, self.context_dim)
+            
+            # Combine
+            states = torch.cat([points_flat, ctx_flat], dim=1)
+            
+            # Reverse integration (points -> Gaussian)
+            if self.solver == 'euler':
+                dt = -1.0 / self.solver_steps  # Negative for reverse
+                t = torch.tensor(1.0, device=points.device)
+                
+                for _ in range(self.solver_steps):
+                    states = states + dt * self.odefunc(t, states)
+                    t = t + dt
+            else:
+                times = torch.linspace(1, 0, 2, device=points.device)  # Reverse time
+                states = odeint(self.odefunc, states, times, method=self.solver)[-1]
+            
+            # Extract transformed points (should be Gaussian-like)
+            gaussian_points = states[:, :self.point_dim]
+            gaussian_points = gaussian_points.view(batch_size, num_points, self.point_dim)
+            
+            # Return transformed points and dummy log determinant
+            delta_log_p = torch.zeros(batch_size, num_points, 1, device=points.device)
+            return gaussian_points, delta_log_p
 
 
 def test_lightweight():
