@@ -25,8 +25,7 @@ import datetime
 import json
 sys.path.append('.')
 
-from src.models.pointflow2d_cnf import PointFlow2DCNF
-from src.models.encoder import PointNet2DEncoder
+from src.models.pointflow2d_final import PointFlow2DVAE
 
 # FIXED configuration - addressing underfitting
 LATENT_DIM = 256     # Increased from 128 - more capacity
@@ -123,35 +122,28 @@ def main():
     print(f"✓ Loaded slice with {num_points} points from: {data_path}")
     print(f"  Center: [{center[0]:.3f}, {center[1]:.3f}], Scale: {scale:.3f}")
     
-    # Create LARGER models
-    print("\n🏗️  Building FIXED configuration...")
-    print(f"  Latent dimension: {LATENT_DIM} (increased for more capacity)")
-    print(f"  Hidden dimension: {HIDDEN_DIM} (increased for expressiveness)")
-    print(f"  Solver: Euler with {SOLVER_STEPS} steps (increased quality)")
+    # Create REAL PointFlow model 
+    print("\n🏗️  Building REAL PointFlow2DVAE...")
+    print(f"  Latent dimension: {LATENT_DIM}")
+    print(f"  Hidden dimension: {HIDDEN_DIM}")
+    print(f"  Solver: dopri5 (real ODE solver)")
     
-    # Encoder - larger
-    encoder = PointNet2DEncoder(
+    # Full PointFlow2DVAE with proper CNF
+    model = PointFlow2DVAE(
         input_dim=2,
-        hidden_dim=256,  # Larger encoder too
-        latent_dim=LATENT_DIM
-    ).to(device)
-    
-    # Decoder - much larger
-    decoder = PointFlow2DCNF(
-        point_dim=2,
-        context_dim=LATENT_DIM,
+        latent_dim=LATENT_DIM,
         hidden_dim=HIDDEN_DIM,
-        solver='euler',
-        solver_steps=SOLVER_STEPS
+        use_latent_flow=False,  # Autoencoder mode for overfitting
+        use_deterministic_encoder=True,
+        cnf_atol=1e-4,
+        cnf_rtol=1e-4
     ).to(device)
     
-    total_params = sum(p.numel() for p in encoder.parameters()) + \
-                   sum(p.numel() for p in decoder.parameters())
-    print(f"  Total parameters: {total_params:,} (much larger model)")
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"  Total parameters: {total_params:,} (REAL CNF)")
     
-    # Better optimizer and scheduler
-    params = list(encoder.parameters()) + list(decoder.parameters())
-    optimizer = torch.optim.AdamW(params, lr=LEARNING_RATE, weight_decay=1e-5)
+    # Optimizer
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
     
     # Two-phase learning rate schedule
     def lr_schedule(epoch):
@@ -182,50 +174,27 @@ def main():
     for epoch in pbar:
         optimizer.zero_grad()
         
-        # Forward pass with mixed precision
+        # REAL PointFlow training using reconstruction loss
         if use_amp:
             with torch.cuda.amp.autocast():
-                # Encode
-                z_mu, z_logvar = encoder(target_batch)
-                z = z_mu  # Deterministic for overfitting
-                
-                # FIXED: PointFlow training - Real slice TO Gaussian blob (forward CNF)
-                # This is the correct PointFlow training direction!
-                gaussian_blob_batch, delta_log_py = decoder(target_batch, z, reverse=False)
-                
-                # Loss: Gaussian blob should be close to N(0,I)
-                log_py = torch.distributions.Normal(0, 1).log_prob(gaussian_blob_batch).view(BATCH_SIZE, -1).sum(1, keepdim=True)  # [B, 1]
-                delta_log_py = delta_log_py.view(BATCH_SIZE, num_points, 1).sum(1)  # [B, 1]
-                log_px = log_py - delta_log_py  # [B, 1]
-                
-                # PointFlow loss: negative log likelihood
-                loss = -log_px.mean()
+                # Use PointFlow2DVAE's reconstruction method 
+                recon_loss = model.reconstruction_loss(target_batch)
+                loss = recon_loss
         else:
-            # Standard precision fallback
-            z_mu, z_logvar = encoder(target_batch)
-            z = z_mu
-            
-            # FIXED: PointFlow training - Real slice TO Gaussian blob (forward CNF)
-            gaussian_blob_batch, delta_log_py = decoder(target_batch, z, reverse=False)
-            
-            # Loss: Gaussian blob should be close to N(0,I)
-            log_py = torch.distributions.Normal(0, 1).log_prob(gaussian_blob_batch).view(BATCH_SIZE, -1).sum(1, keepdim=True)
-            delta_log_py = delta_log_py.view(BATCH_SIZE, num_points, 1).sum(1)
-            log_px = log_py - delta_log_py
-            
-            # PointFlow loss: negative log likelihood
-            loss = -log_px.mean()
+            # Standard precision
+            recon_loss = model.reconstruction_loss(target_batch)
+            loss = recon_loss
         
         # Backward pass
         if use_amp:
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(params, max_norm=1.0)  # Tighter clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(params, max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
         
         scheduler.step()
@@ -251,8 +220,7 @@ def main():
             print(f"\n📊 Epoch {epoch} FIXED Analysis:")
             
             with torch.no_grad():
-                z_mu, z_logvar = encoder(target_points.unsqueeze(0))
-                recon = decoder.sample(z_mu, num_points).squeeze(0)
+                recon = model.reconstruct(target_points.unsqueeze(0)).squeeze(0)
                 
                 # Detailed metrics
                 total_loss, chamfer, coverage_loss, target_cov, pred_cov = improved_chamfer_loss(
@@ -261,7 +229,6 @@ def main():
                 
                 print(f"  🎯 Total Loss: {total_loss:.4f} (Chamfer: {chamfer:.4f}, Coverage: {coverage_loss:.4f})")
                 print(f"  📐 Point Coverage: Target {target_cov*100:.1f}%, Pred {pred_cov*100:.1f}%")
-                print(f"  🧠 Latent Norm: {z_mu.norm().item():.2f}")
                 print(f"  📈 Learning Rate: {scheduler.get_last_lr()[0]:.2e}")
             
             # Save visualization
@@ -316,8 +283,7 @@ def main():
     
     # Final detailed analysis
     with torch.no_grad():
-        z_mu, z_logvar = encoder(target_points.unsqueeze(0))
-        final_recon = decoder.sample(z_mu, num_points).squeeze(0)
+        final_recon = model.reconstruct(target_points.unsqueeze(0)).squeeze(0)
         
         total_loss, chamfer, coverage_loss, target_cov, pred_cov = improved_chamfer_loss(
             final_recon, target_points
@@ -332,24 +298,20 @@ def main():
     # Save final results
     if best_loss < TARGET_LOSS:
         checkpoint = {
-            'encoder_state': encoder.state_dict(),
-            'decoder_state': decoder.state_dict(),
+            'model_state': model.state_dict(),
             'config': {
                 'latent_dim': LATENT_DIM,
                 'hidden_dim': HIDDEN_DIM,
-                'solver_steps': SOLVER_STEPS,
                 'best_loss': best_loss,
                 'target_loss': TARGET_LOSS
             }
         }
         torch.save(checkpoint, output_dir / 'fixed_overfit_checkpoint.pth')
-        print(f"\n💾 FIXED model saved!")
+        print(f"\n💾 REAL PointFlow model saved!")
     
     # Save metrics
     metrics = {
         'losses': losses,
-        'chamfer_losses': chamfer_losses,
-        'coverage_losses': coverage_losses,
         'best_loss': best_loss,
         'target_loss': TARGET_LOSS,
         'success': best_loss < TARGET_LOSS,
