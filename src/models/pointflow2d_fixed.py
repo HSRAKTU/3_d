@@ -8,6 +8,24 @@ import numpy as np
 from typing import Dict, Tuple, Optional
 import logging
 
+def standard_normal_logprob(z):
+    """
+    Compute log probability of standard normal distribution.
+    From original PointFlow implementation.
+    """
+    dim = z.size(-1)
+    log_z = -0.5 * dim * np.log(2 * np.pi)
+    return log_z - z.pow(2) / 2
+
+def gaussian_entropy(logvar):
+    """
+    Compute entropy of Gaussian distribution.
+    From original PointFlow implementation.
+    """
+    const = 0.5 * float(logvar.size(1)) * (1. + np.log(np.pi * 2))
+    ent = 0.5 * logvar.sum(dim=1, keepdim=False) + const
+    return ent
+
 try:
     from .encoder import PointNet2DEncoder, reparameterize, kl_divergence
     from .pointflow_cnf import PointFlowCNF
@@ -61,6 +79,12 @@ class PointFlow2DVAE_Fixed(nn.Module):
         self.input_dim = input_dim
         self.latent_dim = latent_dim
         self.use_latent_flow = use_latent_flow
+        
+        # Original PointFlow training parameters
+        self.prior_weight = 1.0
+        self.recon_weight = 1.0
+        self.entropy_weight = 1.0
+        self.use_deterministic_encoder = False  # We use variational encoder
         
         # Encoder (PointNet2D)
         self.encoder = PointNet2DEncoder(
@@ -124,137 +148,154 @@ class PointFlow2DVAE_Fixed(nn.Module):
         """
         return self.point_cnf.sample(z, num_points, temperature)
     
-    def forward(self, 
-                x: torch.Tensor, 
-                mask: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+    def forward(self, x, opt, step, writer=None):
         """
-        Forward pass through VAE.
+        EXACT PointFlow training forward pass.
+        Handles complete training step including loss computation, backward, and optimizer step.
         
         Args:
             x: Input points, shape (batch_size, num_points, input_dim)
-            mask: Optional mask for valid points
+            opt: Optimizer
+            step: Current training step
+            writer: Optional tensorboard writer
             
         Returns:
-            Dictionary containing model outputs
+            Dictionary containing training metrics
         """
-        # Encode
-        mu, logvar = self.encode(x, mask)
+        opt.zero_grad()
+        batch_size = x.size(0)
+        num_points = x.size(1)
         
-        # Reparameterize
-        z = reparameterize(mu, logvar)
+        # Encode to get latent distribution
+        z_mu, z_sigma = self.encoder(x)
         
-        # Compute prior probability P(z) using Latent CNF (EXACTLY AS POINTFLOW)
-        if self.use_latent_flow and self.latent_cnf is not None:
-            # Transform z through Latent CNF to get log P(z)
-            w, log_prob_cnf = self.latent_cnf.forward(z, reverse=False)
-            
-            # Standard Gaussian log probability of w
-            log_prob_w = -0.5 * (w ** 2).sum(dim=1) - 0.5 * self.latent_dim * np.log(2 * np.pi)
-            
-            # Total prior log probability
-            log_prior = log_prob_w + log_prob_cnf
+        if self.use_deterministic_encoder:
+            z = z_mu + 0 * z_sigma
         else:
-            # Standard VAE: assume z ~ N(0,1)
-            w = None
-            log_prior = torch.zeros(z.shape[0], device=z.device)
-        
-        # Compute reconstruction likelihood P(X|z) using Point CNF
-        log_likelihood = self.point_cnf.log_prob(x, z)
-        
-        # Handle masking
-        if mask is not None:
-            log_likelihood = log_likelihood * mask
-            # Sum over valid points only
-            log_likelihood = log_likelihood.sum(dim=1) / mask.sum(dim=1)
+            z = reparameterize(z_mu, z_sigma)
+
+        # Compute H[Q(z|X)] - entropy of encoder distribution
+        if self.use_deterministic_encoder:
+            entropy = torch.zeros(batch_size).to(z)
         else:
-            # Average over all points
-            log_likelihood = log_likelihood.mean(dim=1)
-        
-        # KL divergence (for encoder regularization)
-        kl_loss = kl_divergence(mu, logvar)
-        
-        return {
-            'mu': mu,
-            'logvar': logvar,
-            'z': z,
-            'w': w if self.use_latent_flow else None,
-            'log_likelihood': log_likelihood,
-            'log_prior': log_prior,
-            'kl_loss': kl_loss
-        }
-    
-    def sample(self, 
-               batch_size: int, 
-               num_points: int, 
-               device: Optional[torch.device] = None,
-               temperature: float = 1.0) -> torch.Tensor:
-        """
-        Sample new point clouds.
-        
-        Args:
-            batch_size: Number of samples
-            num_points: Number of points per sample
-            device: Device to generate on
-            temperature: Sampling temperature
-            
-        Returns:
-            Generated points, shape (batch_size, num_points, input_dim)
-        """
-        if device is None:
-            device = next(self.parameters()).device
-        
-        # Sample latent codes exactly as PointFlow does
-        if self.use_latent_flow and self.latent_cnf is not None:
-            # Sample w ~ N(0,1) and transform through Latent CNF to get z
-            w = torch.randn(batch_size, self.latent_dim, device=device)
-            z, _ = self.latent_cnf.forward(w, reverse=True)
-        else:
-            # Standard VAE sampling
-            z = torch.randn(batch_size, self.latent_dim, device=device)
-        
-        # Decode using Point CNF
-        return self.decode(z, num_points, temperature)
-    
-    def compute_loss(self, 
-                     x: torch.Tensor, 
-                     mask: Optional[torch.Tensor] = None,
-                     beta: float = 1.0) -> Dict[str, torch.Tensor]:
-        """
-        Compute VAE loss.
-        
-        Args:
-            x: Input points
-            mask: Optional mask
-            beta: Beta parameter for KL weighting
-            
-        Returns:
-            Dictionary containing losses
-        """
-        result = self.forward(x, mask)
-        
-        # Reconstruction loss (negative log likelihood from Point CNF)
-        recon_loss = -result['log_likelihood'].mean()
-        
-        # Prior loss (negative log probability from Latent CNF)
-        prior_loss = -result['log_prior'].mean()
-        
-        # KL loss (encoder regularization)
-        kl_loss = result['kl_loss'].mean()
-        
-        # Total loss (EXACTLY as PointFlow)
+            entropy = gaussian_entropy(z_sigma)
+
+        # Compute the prior probability P(z) using Latent CNF
         if self.use_latent_flow:
-            # Complete PointFlow loss: reconstruction + prior + KL regularization
-            total_loss = recon_loss + prior_loss + beta * kl_loss
+            w, delta_log_pw = self.latent_cnf(
+                z, None, torch.zeros(batch_size, 1).to(z)
+            )
+            log_pw = standard_normal_logprob(w).view(batch_size, -1).sum(1, keepdim=True)
+            delta_log_pw = delta_log_pw.view(batch_size, 1)
+            log_pz = log_pw - delta_log_pw
         else:
-            # Standard VAE loss
-            total_loss = recon_loss + beta * kl_loss
-        
+            log_pz = standard_normal_logprob(z).view(batch_size, -1).sum(1, keepdim=True)
+
+        # Compute the reconstruction likelihood P(X|z) using Point CNF
+        z_new = z.view(*z.size())
+        z_new = z_new + (log_pz * 0.).mean()  # Gradient flow trick from original
+        y, delta_log_py = self.point_cnf(
+            x, z_new, torch.zeros(batch_size, num_points, 1).to(x)
+        )
+        log_py = standard_normal_logprob(y).view(batch_size, -1).sum(1, keepdim=True)
+        delta_log_py = delta_log_py.view(batch_size, num_points, 1).sum(1)
+        log_px = log_py - delta_log_py
+
+        # Loss computation exactly as original PointFlow
+        entropy_loss = -entropy.mean() * self.entropy_weight
+        recon_loss = -log_px.mean() * self.recon_weight
+        prior_loss = -log_pz.mean() * self.prior_weight
+        loss = entropy_loss + prior_loss + recon_loss
+        loss.backward()
+        opt.step()
+
+        # Logging
+        entropy_log = entropy.mean()
+        recon = -log_px.mean()
+        prior = -log_pz.mean()
+
+        recon_nats = recon / float(x.size(1) * x.size(2))
+        prior_nats = prior / float(self.latent_dim)
+
+        if writer is not None:
+            writer.add_scalar('train/entropy', entropy_log, step)
+            writer.add_scalar('train/prior', prior, step)
+            writer.add_scalar('train/prior(nats)', prior_nats, step)
+            writer.add_scalar('train/recon', recon, step)
+            writer.add_scalar('train/recon(nats)', recon_nats, step)
+
         return {
-            'total_loss': total_loss,
-            'recon_loss': recon_loss,
-            'prior_loss': prior_loss,
-            'kl_loss': kl_loss
+            'entropy': entropy_log.cpu().detach().item()
+            if not isinstance(entropy_log, float) else entropy_log,
+            'prior_nats': prior_nats.cpu().detach().item(),
+            'recon_nats': recon_nats.cpu().detach().item(),
         }
+    
+    def encode(self, x):
+        """Encode point cloud to latent distribution parameters."""
+        z_mu, z_sigma = self.encoder(x)
+        if self.use_deterministic_encoder:
+            return z_mu
+        else:
+            return reparameterize(z_mu, z_sigma)
+
+    def decode(self, z, num_points, truncate_std=None):
+        """Decode latent code to point cloud using Point CNF."""
+        # Generate points from standard normal
+        y = torch.randn(z.size(0), num_points, self.input_dim).to(z)
+        if truncate_std is not None:
+            # Apply truncation if specified
+            y = torch.clamp(y, -truncate_std, truncate_std)
+        
+        # Transform through Point CNF
+        x = self.point_cnf(y, z, reverse=True).view(*y.size())
+        return y, x
+
+    def sample(self, batch_size, num_points, truncate_std=None, truncate_std_latent=None, gpu=None):
+        """Sample point clouds exactly as original PointFlow."""
+        assert self.use_latent_flow, "Sampling requires `self.use_latent_flow` to be True."
+        
+        # Generate the shape code from the prior
+        device = next(self.parameters()).device if gpu is None else f'cuda:{gpu}'
+        w = torch.randn(batch_size, self.latent_dim).to(device)
+        if truncate_std_latent is not None:
+            w = torch.clamp(w, -truncate_std_latent, truncate_std_latent)
+        
+        z, _ = self.latent_cnf(w, None, reverse=True)
+        z = z.view(*w.size())
+        
+        # Sample points conditioned on the shape code
+        y = torch.randn(batch_size, num_points, self.input_dim).to(device)
+        if truncate_std is not None:
+            y = torch.clamp(y, -truncate_std, truncate_std)
+        
+        x, _ = self.point_cnf(y, z, reverse=True)
+        x = x.view(*y.size())
+        return z, x
+
+    def reconstruct(self, x, num_points=None, truncate_std=None):
+        """Reconstruct point clouds exactly as original PointFlow."""
+        num_points = x.size(1) if num_points is None else num_points
+        z = self.encode(x)
+        _, x_recon = self.decode(z, num_points, truncate_std)
+        return x_recon
+    
+    def make_optimizer(self, args):
+        """Create optimizer exactly as original PointFlow."""
+        def _get_opt_(params):
+            if args.optimizer == 'adam':
+                optimizer = torch.optim.Adam(params, lr=args.lr, betas=(args.beta1, args.beta2),
+                                       weight_decay=args.weight_decay)
+            elif args.optimizer == 'sgd':
+                optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum)
+            else:
+                assert 0, "args.optimizer should be either 'adam' or 'sgd'"
+            return optimizer
+        
+        opt = _get_opt_(list(self.encoder.parameters()) + 
+                       list(self.point_cnf.parameters()) +
+                       list(self.latent_cnf.parameters()))
+        return opt
     
     def get_model_info(self) -> Dict[str, int]:
         """Get model parameter information."""
@@ -300,22 +341,31 @@ def main():
     print(f"   Latent CNF: {info['latent_cnf_parameters']:,}")
     print(f"   Use Latent Flow: {info['use_latent_flow']}")
     
-    # Test forward pass
-    result = model.forward(points)
-    print(f"✅ Forward pass: log_likelihood shape {result['log_likelihood'].shape}")
-    print(f"   Log likelihood range: [{result['log_likelihood'].min():.3f}, {result['log_likelihood'].max():.3f}]")
+    # Test forward pass (requires optimizer)
+    class DummyOpt:
+        lr = 1e-3
+        beta1 = 0.9
+        beta2 = 0.999
+        weight_decay = 0.
+        optimizer = 'adam'
     
-    # Test loss computation
-    loss_dict = model.compute_loss(points, beta=0.01)
-    print(f"✅ Loss computation:")
-    print(f"   Total: {loss_dict['total_loss'].item():.3f}")
-    print(f"   Recon: {loss_dict['recon_loss'].item():.3f}")
-    print(f"   KL: {loss_dict['kl_loss'].item():.3f}")
+    opt_args = DummyOpt()
+    optimizer = model.make_optimizer(opt_args)
+
+    result = model.forward(points, optimizer, 0)
+    print(f"✅ Forward pass completed.")
+    print(f"   Entropy: {result['entropy']:.3f}")
+    print(f"   Prior nats: {result['prior_nats']:.3f}")
+    print(f"   Recon nats: {result['recon_nats']:.3f}")
     
     # Test sampling
-    samples = model.sample(batch_size, num_points)
-    print(f"✅ Sampling: {samples.shape}")
+    z, samples = model.sample(batch_size, num_points)
+    print(f"✅ Sampling: z shape {z.shape}, samples shape {samples.shape}")
     
+    # Test reconstruction
+    recon_samples = model.reconstruct(points)
+    print(f"✅ Reconstruction: {recon_samples.shape}")
+
     print("🎉 PointFlow2DVAE_Fixed test passed!")
 
 

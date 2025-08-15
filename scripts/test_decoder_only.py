@@ -28,9 +28,27 @@ def test_decoder_learning(data_path: str, slice_name: str, device: str = 'cuda')
     
     # Load target slice
     slice_path = Path(data_path) / slice_name
-    data = torch.load(slice_path)
-    target_points = data['points'].float().to(device)  # [N, 2]
-    mask = data['mask'].float().to(device)  # [N]
+    
+    # Handle different data formats
+    if slice_path.suffix == '.npy':
+        # NumPy format
+        target_points = torch.from_numpy(np.load(slice_path)).float().to(device)
+        if target_points.ndim == 1:
+            # Flatten array, reshape to [N, 2]
+            target_points = target_points.reshape(-1, 2)
+        mask = torch.ones(target_points.shape[0]).to(device)  # All points are valid
+    else:
+        # PyTorch format
+        data = torch.load(slice_path, map_location=device)
+        if isinstance(data, dict):
+            target_points = data['points'].float().to(device)  # [N, 2]
+            mask = data.get('mask', torch.ones(target_points.shape[0])).float().to(device)  # [N]
+        else:
+            # Just a tensor
+            target_points = data.float().to(device)
+            if target_points.ndim == 1:
+                target_points = target_points.reshape(-1, 2)
+            mask = torch.ones(target_points.shape[0]).to(device)
     
     # Get actual points (remove padding)
     valid_points = target_points[mask.bool()]
