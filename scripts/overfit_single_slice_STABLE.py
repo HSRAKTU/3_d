@@ -196,6 +196,7 @@ def main():
                 patience_counter = 0
                 
                 # Save best model
+                Path('outputs').mkdir(exist_ok=True)
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
@@ -229,47 +230,46 @@ def main():
         
         # Visualization every 200 epochs
         if epoch % 200 == 0:
-            with torch.no_grad():
-                plt.figure(figsize=(12, 4))
-                
-                # Loss curve
-                plt.subplot(1, 3, 1)
-                plt.plot(losses, 'b-', label='Chamfer Distance')
-                plt.axhline(y=TARGET_CHAMFER, color='r', linestyle='--', label=f'Target: {TARGET_CHAMFER}')
-                plt.xlabel('Epoch')
-                plt.ylabel('Chamfer Distance')
-                plt.title('Stable Training Progress')
-                plt.legend()
-                plt.grid(True)
-                plt.yscale('log')
-                
-                # Reconstruction
-                recon_viz = model.reconstruct(target_points.unsqueeze(0)).squeeze(0)
-                target_np = target_points.detach().cpu().numpy()
-                recon_np = recon_viz.detach().cpu().numpy()
-                
-                plt.subplot(1, 3, 2)
-                plt.scatter(target_np[:, 0], target_np[:, 1], c='blue', s=30, alpha=0.7, label='Target')
-                plt.scatter(recon_np[:, 0], recon_np[:, 1], c='red', s=30, alpha=0.7, label='Reconstructed')
-                plt.axis('equal')
-                plt.grid(True)
-                plt.legend()
-                plt.title(f'Epoch {epoch} (Chamfer: {loss_val:.4f})')
-                
-                # Scale check
-                plt.subplot(1, 3, 3)
-                plt.hist(recon_np.flatten(), bins=50, alpha=0.7, label='Recon coords')
-                plt.hist(target_np.flatten(), bins=50, alpha=0.7, label='Target coords')
-                plt.xlabel('Coordinate Value')
-                plt.ylabel('Frequency')
-                plt.title('Coordinate Distribution')
-                plt.legend()
-                
-                plt.tight_layout()
-                output_dir = Path("outputs/stable_overfit")
-                output_dir.mkdir(parents=True, exist_ok=True)
-                plt.savefig(output_dir / f"stable_epoch_{epoch:04d}.png", dpi=150, bbox_inches='tight')
-                plt.close()
+            plt.figure(figsize=(12, 4))
+            
+            # Loss curve
+            plt.subplot(1, 3, 1)
+            plt.plot(losses, 'b-', label='Chamfer Distance')
+            plt.axhline(y=TARGET_CHAMFER, color='r', linestyle='--', label=f'Target: {TARGET_CHAMFER}')
+            plt.xlabel('Epoch')
+            plt.ylabel('Chamfer Distance')
+            plt.title('Stable Training Progress')
+            plt.legend()
+            plt.grid(True)
+            plt.yscale('log')
+            
+            # Reconstruction (needs gradients for CNF)
+            recon_viz = model.reconstruct(target_points.unsqueeze(0)).squeeze(0)
+            target_np = target_points.detach().cpu().numpy()
+            recon_np = recon_viz.detach().cpu().numpy()
+            
+            plt.subplot(1, 3, 2)
+            plt.scatter(target_np[:, 0], target_np[:, 1], c='blue', s=30, alpha=0.7, label='Target')
+            plt.scatter(recon_np[:, 0], recon_np[:, 1], c='red', s=30, alpha=0.7, label='Reconstructed')
+            plt.axis('equal')
+            plt.grid(True)
+            plt.legend()
+            plt.title(f'Epoch {epoch} (Chamfer: {loss_val:.4f})')
+            
+            # Scale check
+            plt.subplot(1, 3, 3)
+            plt.hist(recon_np.flatten(), bins=50, alpha=0.7, label='Recon coords')
+            plt.hist(target_np.flatten(), bins=50, alpha=0.7, label='Target coords')
+            plt.xlabel('Coordinate Value')
+            plt.ylabel('Frequency')
+            plt.title('Coordinate Distribution')
+            plt.legend()
+            
+            plt.tight_layout()
+            output_dir = Path("outputs/stable_overfit")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            plt.savefig(output_dir / f"stable_epoch_{epoch:04d}.png", dpi=150, bbox_inches='tight')
+            plt.close()
     
     # Final evaluation
     print(f"\n📊 STABLE TRAINING RESULTS:")
@@ -283,7 +283,7 @@ def main():
         checkpoint = torch.load('outputs/best_model.pth')
         model.load_state_dict(checkpoint['model_state_dict'])
         
-        # Final visualization with best model
+        # Final visualization with best model (needs gradients)
         final_recon = model.reconstruct(target_points.unsqueeze(0)).squeeze(0)
         final_chamfer = compute_chamfer_distance(target_points, final_recon)
         print(f"  📐 Best model Chamfer: {final_chamfer:.4f}")
