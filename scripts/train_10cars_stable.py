@@ -67,7 +67,7 @@ def main():
         data_directory="data/training_dataset",
         car_ids=selected_car_ids,  # Pass specific car IDs
         normalize=True,
-        max_points=1000,  # Filter outliers
+        max_points=None,  # Don't filter - keep ALL slices
         min_points=10
     )
     
