@@ -188,34 +188,34 @@ def main():
         val_losses = []
         val_chamfers = []
         
-        with torch.no_grad():
-            for batch in val_loader:
-                points = batch['points'].to(device)
-                mask = batch['mask'].to(device)
-                num_points = batch['num_points']
+        # NO torch.no_grad() here because CNF needs gradients for divergence
+        for batch in val_loader:
+            points = batch['points'].to(device)
+            mask = batch['mask'].to(device)
+            num_points = batch['num_points']
+            
+            # Reconstruction loss - SAME AS TRAINING
+            z = model.encode(points)
+            y, log_det = model.point_cnf(points, z, reverse=False)
+            
+            log_py = torch.distributions.Normal(0, 1).log_prob(y)
+            log_py = log_py.view(points.shape[0], -1).sum(1, keepdim=True)
+            log_px = log_py + log_det.view(points.shape[0], -1).sum(1, keepdim=True)
+            
+            val_loss = -log_px.mean() + 0.01 * (y ** 2).mean()
+            val_losses.append(val_loss.item())
+            
+            # Compute Chamfer distance for first item in batch
+            if len(val_chamfers) < 10:  # Sample a few
+                n_points = num_points[0].item()
+                target = points[0, :n_points]
                 
-                # Reconstruction loss - SAME AS TRAINING
-                z = model.encode(points)
-                y, log_det = model.point_cnf(points, z, reverse=False)
+                # Reconstruct single item
+                recon = model.reconstruct(points[0:1])
+                recon = recon[0, :n_points]
                 
-                log_py = torch.distributions.Normal(0, 1).log_prob(y)
-                log_py = log_py.view(points.shape[0], -1).sum(1, keepdim=True)
-                log_px = log_py + log_det.view(points.shape[0], -1).sum(1, keepdim=True)
-                
-                val_loss = -log_px.mean() + 0.01 * (y ** 2).mean()
-                val_losses.append(val_loss.item())
-                
-                # Compute Chamfer distance for first item in batch
-                if len(val_chamfers) < 10:  # Sample a few
-                    n_points = num_points[0].item()
-                    target = points[0, :n_points]
-                    
-                    # Reconstruct single item
-                    recon = model.reconstruct(points[0:1])
-                    recon = recon[0, :n_points]
-                    
-                    chamfer = compute_chamfer_distance(recon, target)
-                    val_chamfers.append(chamfer)
+                chamfer = compute_chamfer_distance(recon, target)
+                val_chamfers.append(chamfer)
         
         # Record epoch stats
         avg_train_loss = np.mean(train_losses)
@@ -259,20 +259,19 @@ def main():
         # Visualize sample every 10 epochs
         if (epoch + 1) % 10 == 0:
             model.eval()
-            with torch.no_grad():
-                # Get a validation sample
-                val_batch = next(iter(val_loader))
-                points = val_batch['points'][0:1].to(device)
-                mask = val_batch['mask'][0:1].to(device)
-                num_points = val_batch['num_points'][0:1]
-                
-                # Reconstruct
-                recon = model.reconstruct(points, mask, num_points)
-                
-                # Extract actual points
-                n_points = num_points[0].item()
-                target_np = points[0, :n_points].cpu().numpy()
-                recon_np = recon[0, :n_points].cpu().numpy()
+            # NO torch.no_grad() - CNF needs gradients
+            # Get a validation sample
+            val_batch = next(iter(val_loader))
+            points = val_batch['points'][0:1].to(device)
+            num_points = val_batch['num_points'][0:1]
+            
+            # Reconstruct
+            recon = model.reconstruct(points)
+            
+            # Extract actual points
+            n_points = num_points[0].item()
+            target_np = points[0, :n_points].detach().cpu().numpy()
+            recon_np = recon[0, :n_points].detach().cpu().numpy()
                 
                 # Plot
                 fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
@@ -378,13 +377,12 @@ def main():
             else:
                 mask = torch.ones_like(points[..., 0])
             
-            # Reconstruct
-            with torch.no_grad():
-                recon = model.reconstruct(points, mask, num_points)
+            # Reconstruct - NO torch.no_grad()
+            recon = model.reconstruct(points)
             
             n_points = num_points[0].item()
-            target_np = points[0, :n_points].cpu().numpy()
-            recon_np = recon[0, :n_points].cpu().numpy()
+            target_np = points[0, :n_points].detach().cpu().numpy()
+            recon_np = recon[0, :n_points].detach().cpu().numpy()
             
             # Compute metrics
             chamfer = compute_chamfer_distance(recon[0, :n_points], points[0, :n_points])
