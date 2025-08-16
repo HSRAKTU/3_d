@@ -209,7 +209,7 @@ def main():
     
     # Create model - use the exact working architecture
     model = PointFlow2DAdaptedVAE(
-        point_dim=2,
+        input_dim=2,
         latent_dim=args.latent_dim,
         encoder_hidden_dim=args.hidden_dim,
         cnf_hidden_dim=args.hidden_dim,
