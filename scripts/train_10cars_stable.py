@@ -19,7 +19,8 @@ sys.path.append('.')
 # EXACT SAME MODEL AS SINGLE SLICE SUCCESS
 from src.models.pointflow2d_adapted import PointFlow2DAdaptedVAE
 from src.training.dataset import SliceDataset, collate_variable_length
-from torch.utils.data import DataLoader, random_split
+from src.data.loader import SliceDataLoader
+from torch.utils.data import DataLoader, random_split, Subset
 
 # Import the EXACT SAME helper functions from stable script
 from overfit_single_slice_STABLE import (
@@ -53,22 +54,22 @@ def main():
     
     # Load dataset
     print("📊 Loading 10-car dataset...")
+    
+    # First get the car IDs and limit to NUM_CARS
+    loader = SliceDataLoader("data/training_dataset")
+    available_car_ids = loader.get_car_ids()
+    selected_car_ids = available_car_ids[:NUM_CARS]  # Take first 10 cars
+    
+    print(f"   Selected cars: {selected_car_ids[:3]}... (showing first 3 of {len(selected_car_ids)})")
+    
+    # Load dataset with only the selected cars
     dataset = SliceDataset(
         data_directory="data/training_dataset",
+        car_ids=selected_car_ids,  # Pass specific car IDs
         normalize=True,
         max_points=1000,  # Filter outliers
         min_points=10
     )
-    
-    # Get first 10 cars worth of data
-    # Note: This assumes slices are ordered by car
-    total_slices = len(dataset)
-    slices_per_car = total_slices // dataset.loader.get_num_cars()
-    num_10car_slices = min(slices_per_car * NUM_CARS, total_slices)
-    
-    # Use subset
-    indices = list(range(num_10car_slices))
-    dataset = torch.utils.data.Subset(dataset, indices)
     
     print(f"   Using {len(dataset)} slices from {NUM_CARS} cars")
     
