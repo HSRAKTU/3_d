@@ -270,43 +270,38 @@ def train_epoch(model, dataloader, optimizer, device, epoch):
         'chamfer': 0, 'volume': 0, 'log_det_mean': 0
     }
     
-    with tqdm(dataloader, desc=f'Epoch {epoch}', leave=False) as pbar:
-        for batch_idx, batch in enumerate(pbar):
-            points = batch['points'].to(device)
-            mask = batch['mask'].to(device)
+    for batch_idx, batch in enumerate(dataloader):
+        points = batch['points'].to(device)
+        mask = batch['mask'].to(device)
+        
+        # Apply mask
+        points = points * mask.unsqueeze(-1)
+        
+        optimizer.zero_grad()
+        
+        try:
+            loss, losses = model.compute_losses(points)
             
-            # Apply mask
-            points = points * mask.unsqueeze(-1)
-            
-            optimizer.zero_grad()
-            
-            try:
-                loss, losses = model.compute_losses(points)
-                
-                if torch.isnan(loss) or torch.isinf(loss):
-                    print(f"Warning: Invalid loss at batch {batch_idx}, skipping")
-                    continue
-                    
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
-                
-                total_loss += loss.item()
-                for k, v in losses.items():
-                    if k != 'total':
-                        loss_components[k] += v
-                        
-                # Update progress bar
-                pbar.set_postfix({'loss': f'{loss.item():.4f}', 
-                                  'chamfer': f'{losses["chamfer"]:.4f}'})
-                        
-            except Exception as e:
-                print(f"Error in batch {batch_idx}: {e}")
+            if torch.isnan(loss) or torch.isinf(loss):
+                print(f"Warning: Invalid loss at batch {batch_idx}, skipping")
                 continue
                 
-            # Clear cache periodically
-            if batch_idx % 10 == 0:
-                torch.cuda.empty_cache()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+            
+            total_loss += loss.item()
+            for k, v in losses.items():
+                if k != 'total':
+                    loss_components[k] += v
+                    
+        except Exception as e:
+            print(f"Error in batch {batch_idx}: {e}")
+            continue
+            
+        # Clear cache periodically
+        if batch_idx % 10 == 0:
+            torch.cuda.empty_cache()
             
     n_batches = len(dataloader)
     avg_loss = total_loss / n_batches
@@ -322,7 +317,7 @@ def validate(model, dataloader, device):
     n_batches = 0
     
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc='Validation', leave=False):
+        for batch in dataloader:
             points = batch['points'].to(device)
             mask = batch['mask'].to(device)
             points = points * mask.unsqueeze(-1)
@@ -445,53 +440,47 @@ def main():
     best_chamfer = float('inf')
     
     print("\nStarting training...")
-    with tqdm(range(args.epochs), desc='Training') as pbar:
-        for epoch in pbar:
-            # Train
-            avg_loss, loss_components = train_epoch(
-                model, train_loader, optimizer, device, epoch
-            )
-            
-            # Validate
-            val_chamfer = validate(model, val_loader, device)
-            
-            # Log
-            log_entry = {
+    for epoch in range(args.epochs):
+        # Train
+        avg_loss, loss_components = train_epoch(
+            model, train_loader, optimizer, device, epoch
+        )
+        
+        # Validate
+        val_chamfer = validate(model, val_loader, device)
+        
+        # Log
+        log_entry = {
+            'epoch': epoch,
+            'avg_loss': avg_loss,
+            'val_chamfer': val_chamfer,
+            'lr': scheduler.get_last_lr()[0],
+            **loss_components
+        }
+        training_log.append(log_entry)
+        
+        # Print progress every epoch
+        print(f"Epoch {epoch:3d}/{args.epochs} | Loss: {avg_loss:7.4f} | Chamfer: {val_chamfer:.4f} | "
+              f"Recon: {loss_components['recon']:7.3f} | Prior: {loss_components['prior']:6.3f} | "
+              f"LogDet: {loss_components['log_det_mean']:6.3f} | Volume: {loss_components['volume']:6.3f}")
+        
+        # Early stopping if log determinant explodes
+        if loss_components['log_det_mean'] > 5.0 or loss_components['recon'] < -2.0:
+            print(f"\n⚠️  WARNING: Training unstable! LogDet={loss_components['log_det_mean']:.3f}, "
+                  f"Recon={loss_components['recon']:.3f}")
+            print("Consider: reducing learning rate, increasing volume regularization, or using fewer solver steps")
+        
+        # Save best model
+        if val_chamfer < best_chamfer:
+            best_chamfer = val_chamfer
+            torch.save({
                 'epoch': epoch,
-                'avg_loss': avg_loss,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
                 'val_chamfer': val_chamfer,
-                'lr': scheduler.get_last_lr()[0],
-                **loss_components
-            }
-            training_log.append(log_entry)
-            
-            # Update progress bar
-            pbar.set_postfix({
-                'loss': f'{avg_loss:.4f}',
-                'chamfer': f'{val_chamfer:.4f}',
-                'recon': f'{loss_components["recon"]:.3f}',
-                'logdet': f'{loss_components["log_det_mean"]:.3f}'
-            })
-            
-            # Print detailed progress every 10 epochs
-            if epoch % 10 == 0:
-                print(f"\nEpoch {epoch}/{args.epochs} - Loss: {avg_loss:.4f} - "
-                      f"Chamfer: {val_chamfer:.4f} - "
-                      f"Recon: {loss_components['recon']:.3f} - "
-                      f"Prior: {loss_components['prior']:.3f} - "
-                      f"LogDet: {loss_components['log_det_mean']:.3f}")
-            
-            # Save best model
-            if val_chamfer < best_chamfer:
-                best_chamfer = val_chamfer
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'val_chamfer': val_chamfer,
-                    'config': vars(args)
-                }, output_dir / 'best_model.pth')
-            
+                'config': vars(args)
+            }, output_dir / 'best_model.pth')
+        
         # Save checkpoint
         if epoch % args.save_freq == 0:
             torch.save({
@@ -501,7 +490,7 @@ def main():
                 'val_chamfer': val_chamfer,
             }, output_dir / f'checkpoint_epoch_{epoch}.pth')
             
-        # Save log
+        # Save log after each epoch
         with open(log_file, 'w') as f:
             json.dump(training_log, f, indent=2)
             
