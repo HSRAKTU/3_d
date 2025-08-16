@@ -4,6 +4,9 @@
 This script uses PointFlow2DAdaptedVAE - the proven architecture
 """
 
+import os
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -34,7 +37,7 @@ LEARNING_RATE = 5e-4  # SAME as single slice
 MIN_LR = 1e-4  # SAME as single slice
 EPOCHS = 300  # More epochs with early stopping
 TARGET_CHAMFER = 0.1  # Less strict (multiple shapes)
-BATCH_SIZE = 8  # Reduced to prevent OOM with large slices
+BATCH_SIZE = 4  # Further reduced for large slices without filtering
 GRADIENT_CLIP = 1.0  # SAME as single slice
 WEIGHT_DECAY = 1e-4  # SAME as single slice
 VAL_SPLIT = 0.1  # 10% validation
@@ -67,7 +70,7 @@ def main():
         data_directory="data/training_dataset",
         car_ids=selected_car_ids,  # Pass specific car IDs
         normalize=True,
-        max_points=2000,  # Limit to prevent OOM during gradient computation
+        max_points=None,  # NO FILTERING - use ALL slices
         min_points=10
     )
     
@@ -183,8 +186,8 @@ def main():
                 train_losses.append(loss.item())
                 pbar.set_postfix({'loss': f'{loss.item():.4f}'})
                 
-                # Clear gradients to save memory
-                if batch_idx % 10 == 0:
+                # Clear memory more aggressively for large slices
+                if batch_idx % 5 == 0:
                     torch.cuda.empty_cache()
         
         # Validation
@@ -211,6 +214,7 @@ def main():
             
             # Detach to prevent memory accumulation
             del y, log_det, log_py, log_px, val_loss
+            torch.cuda.empty_cache()
             
             # Compute Chamfer distance for first item in batch
             if len(val_chamfers) < 10:  # Sample a few
