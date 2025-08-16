@@ -152,11 +152,23 @@ def main():
                 # Zero gradients
                 optimizer.zero_grad()
                 
-                # Forward pass - reconstruction loss only (no latent CNF)
-                recon_loss = model.reconstruction_loss(points, mask, num_points)
+                # Forward pass - EXACT SAME AS SINGLE SLICE
+                z = model.encode(points)
+                y, log_det = model.point_cnf(points, z, reverse=False)
                 
-                # Add L2 penalty on CNF output (stability)
-                loss = recon_loss
+                # Log probability under standard normal
+                log_py = torch.distributions.Normal(0, 1).log_prob(y)
+                log_py = log_py.view(points.shape[0], -1).sum(1, keepdim=True)
+                
+                # Add log determinant
+                log_px = log_py + log_det.view(points.shape[0], -1).sum(1, keepdim=True)
+                
+                # Loss is negative log likelihood
+                loss = -log_px.mean()
+                
+                # Add L2 regularization on CNF output
+                output_reg = 0.01 * (y ** 2).mean()
+                loss = loss + output_reg
                 
                 # Backward pass
                 loss.backward()
@@ -182,18 +194,24 @@ def main():
                 mask = batch['mask'].to(device)
                 num_points = batch['num_points']
                 
-                # Reconstruction loss
-                recon_loss = model.reconstruction_loss(points, mask, num_points)
-                val_losses.append(recon_loss.item())
+                # Reconstruction loss - SAME AS TRAINING
+                z = model.encode(points)
+                y, log_det = model.point_cnf(points, z, reverse=False)
+                
+                log_py = torch.distributions.Normal(0, 1).log_prob(y)
+                log_py = log_py.view(points.shape[0], -1).sum(1, keepdim=True)
+                log_px = log_py + log_det.view(points.shape[0], -1).sum(1, keepdim=True)
+                
+                val_loss = -log_px.mean() + 0.01 * (y ** 2).mean()
+                val_losses.append(val_loss.item())
                 
                 # Compute Chamfer distance for first item in batch
                 if len(val_chamfers) < 10:  # Sample a few
                     n_points = num_points[0].item()
                     target = points[0, :n_points]
                     
-                    # Reconstruct
-                    z = model.encode(points[0:1], mask[0:1], num_points[0:1])
-                    recon = model.reconstruct(points[0:1], mask[0:1], num_points[0:1])
+                    # Reconstruct single item
+                    recon = model.reconstruct(points[0:1])
                     recon = recon[0, :n_points]
                     
                     chamfer = compute_chamfer_distance(recon, target)
