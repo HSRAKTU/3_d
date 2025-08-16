@@ -103,7 +103,7 @@ def main():
         cnf_hidden_dim=256,
         solver='euler',
         solver_steps=10,
-        force_cpu_ode=False
+        use_deterministic_encoder=True
     ).to(device)
     
     # Print model info to confirm it's the same
