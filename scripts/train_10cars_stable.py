@@ -24,8 +24,7 @@ from torch.utils.data import DataLoader, random_split
 # Import the EXACT SAME helper functions from stable script
 from overfit_single_slice_STABLE import (
     compute_chamfer_distance,
-    improved_chamfer_loss,
-    plot_slice_comparison
+    improved_chamfer_loss
 )
 
 # Configuration - adapted for multi-slice but same architecture
