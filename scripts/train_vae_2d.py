@@ -378,7 +378,7 @@ def main():
     
     # Load data
     print(f"Loading data for {args.num_cars} cars...")
-    loader = SliceDataLoader()
+    loader = SliceDataLoader('data')  # Specify data directory
     car_ids = loader.get_car_ids()[:args.num_cars]
     
     train_dataset = SliceDataset(
