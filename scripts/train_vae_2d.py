@@ -17,6 +17,38 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from datetime import datetime
 from pathlib import Path
 
+def custom_collate_fn(batch):
+    """Custom collate function for variable-length point clouds"""
+    # Batch is a list of (points, mask, label) tuples
+    # We keep them as lists since they have different sizes
+    points_list = [item[0] for item in batch]
+    masks_list = [item[1] for item in batch]
+    labels_list = [item[2] for item in batch]
+    
+    # Find max points in batch
+    max_points = max(p.shape[0] for p in points_list)
+    
+    # Pad to max size
+    padded_points = []
+    padded_masks = []
+    
+    for points, mask in zip(points_list, masks_list):
+        n_points = points.shape[0]
+        if n_points < max_points:
+            # Pad with zeros
+            pad_size = max_points - n_points
+            points = torch.cat([points, torch.zeros(pad_size, 2)], dim=0)
+            mask = torch.cat([mask, torch.zeros(pad_size)], dim=0)
+        padded_points.append(points)
+        padded_masks.append(mask)
+    
+    # Stack into tensors
+    points_batch = torch.stack(padded_points)
+    masks_batch = torch.stack(padded_masks)
+    labels_batch = torch.tensor(labels_list)
+    
+    return points_batch, masks_batch, labels_batch
+
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -394,7 +426,8 @@ def main():
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=4,
-        pin_memory=True
+        pin_memory=True,
+        collate_fn=custom_collate_fn
     )
     
     # Split for validation
@@ -403,7 +436,8 @@ def main():
     val_loader = DataLoader(
         val_dataset,
         batch_size=args.batch_size,
-        shuffle=False
+        shuffle=False,
+        collate_fn=custom_collate_fn
     )
     
     print(f"Training samples: {len(train_dataset) - val_size}")
