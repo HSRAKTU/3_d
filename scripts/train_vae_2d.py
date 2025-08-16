@@ -378,14 +378,15 @@ def main():
     
     # Load data
     print(f"Loading data for {args.num_cars} cars...")
-    loader = SliceDataLoader('data')  # Specify data directory
+    loader = SliceDataLoader('data/training_dataset')  # Correct path
     car_ids = loader.get_car_ids()[:args.num_cars]
     
     train_dataset = SliceDataset(
-        data_loader=loader,
+        data_directory='data/training_dataset',
         car_ids=car_ids,
+        normalize=True,
         max_points=None,  # Use all points
-        augment=True
+        min_points=10
     )
     
     train_loader = DataLoader(
