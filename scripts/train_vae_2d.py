@@ -17,44 +17,14 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from datetime import datetime
 from pathlib import Path
 
-def custom_collate_fn(batch):
-    """Custom collate function for variable-length point clouds"""
-    # Batch is a list of (points, mask, label) tuples
-    # We keep them as lists since they have different sizes
-    points_list = [item[0] for item in batch]
-    masks_list = [item[1] for item in batch]
-    labels_list = [item[2] for item in batch]
-    
-    # Find max points in batch
-    max_points = max(p.shape[0] for p in points_list)
-    
-    # Pad to max size
-    padded_points = []
-    padded_masks = []
-    
-    for points, mask in zip(points_list, masks_list):
-        n_points = points.shape[0]
-        if n_points < max_points:
-            # Pad with zeros
-            pad_size = max_points - n_points
-            points = torch.cat([points, torch.zeros(pad_size, 2)], dim=0)
-            mask = torch.cat([mask, torch.zeros(pad_size)], dim=0)
-        padded_points.append(points)
-        padded_masks.append(mask)
-    
-    # Stack into tensors
-    points_batch = torch.stack(padded_points)
-    masks_batch = torch.stack(padded_masks)
-    labels_batch = torch.tensor(labels_list)
-    
-    return points_batch, masks_batch, labels_batch
+
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.models.encoder import PointNet2DEncoder
 from src.models.pointflow2d_adapted import PointFlow2DODE
-from src.training.dataset import SliceDataset
+from src.training.dataset import SliceDataset, collate_variable_length
 from src.data.loader import SliceDataLoader
 
 # Set environment for memory efficiency
@@ -298,9 +268,9 @@ def train_epoch(model, dataloader, optimizer, device, epoch):
         'chamfer': 0, 'volume': 0, 'log_det_mean': 0
     }
     
-    for batch_idx, (points, mask, _) in enumerate(dataloader):
-        points = points.to(device)
-        mask = mask.to(device)
+    for batch_idx, batch in enumerate(dataloader):
+        points = batch['points'].to(device)
+        mask = batch['mask'].to(device)
         
         # Apply mask
         points = points * mask.unsqueeze(-1)
@@ -345,9 +315,9 @@ def validate(model, dataloader, device):
     n_batches = 0
     
     with torch.no_grad():
-        for points, mask, _ in dataloader:
-            points = points.to(device)
-            mask = mask.to(device)
+        for batch in dataloader:
+            points = batch['points'].to(device)
+            mask = batch['mask'].to(device)
             points = points * mask.unsqueeze(-1)
             
             try:
@@ -427,7 +397,7 @@ def main():
         shuffle=True,
         num_workers=4,
         pin_memory=True,
-        collate_fn=custom_collate_fn
+        collate_fn=collate_variable_length
     )
     
     # Split for validation
@@ -437,7 +407,7 @@ def main():
         val_dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        collate_fn=custom_collate_fn
+        collate_fn=collate_variable_length
     )
     
     print(f"Training samples: {len(train_dataset) - val_size}")
