@@ -100,14 +100,18 @@ class PointFlow2DODE(nn.Module):
         v = self.net(inputs)
         
         # Compute divergence for log determinant
-        # Using exact divergence computation
-        divergence = 0.0
-        for i in range(self.point_dim):
-            divergence += torch.autograd.grad(
-                v[:, :, i].sum(), points,
-                create_graph=True, retain_graph=True
-            )[0][:, :, i]
-        divergence = divergence.unsqueeze(-1)
+        # Only compute during training when gradients are available
+        if self.training and points.requires_grad:
+            divergence = 0.0
+            for i in range(self.point_dim):
+                divergence += torch.autograd.grad(
+                    v[:, :, i].sum(), points,
+                    create_graph=True, retain_graph=True
+                )[0][:, :, i]
+            divergence = divergence.unsqueeze(-1)
+        else:
+            # During inference, divergence is not needed
+            divergence = torch.zeros(B, N, 1).to(points)
         
         # For stability during integration, we need to pass context along
         if D > self.point_dim:

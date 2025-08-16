@@ -105,6 +105,9 @@ def main():
             points = points * mask.unsqueeze(-1)
             
             # EXACT same training as single-slice
+            # Enable gradients for divergence computation in CNF
+            points.requires_grad_(True)
+            
             z = model.encode(points)
             
             # Forward through CNF (real slice → Gaussian)
