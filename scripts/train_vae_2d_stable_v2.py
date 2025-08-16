@@ -60,56 +60,55 @@ def train_epoch(model, dataloader, optimizer, device, epoch, warmup_epochs):
         # Apply mask
         points = points * mask.unsqueeze(-1)
         
+        # Enable gradients for CNF divergence computation
+        points.requires_grad_(True)
+        
         optimizer.zero_grad()
         
-        try:
-            # Encode to latent
-            z = model.encode(points)
-            
-            # Forward pass through CNF
-            y, log_det = model.point_cnf(points, z, reverse=False)
-            
-            # Compute negative log-likelihood
-            log_py = torch.distributions.Normal(0, 1).log_prob(y)
-            log_py = log_py.view(points.shape[0], -1).sum(1, keepdim=True)
-            log_px = log_py + log_det.view(points.shape[0], -1).sum(1, keepdim=True)
-            
-            # Primary loss
-            nll_loss = -log_px.mean()
-            
-            # Add L2 regularization on CNF output
-            output_reg = 0.01 * (y ** 2).mean()
-            
-            # Two-stage training
-            if epoch < warmup_epochs:
-                # Stage 1: Only reconstruction loss
-                loss = nll_loss + output_reg
-            else:
-                # Stage 2: Add VAE regularization (simplified for now)
-                # TODO: Add proper prior and entropy losses when implementing stochastic encoder
-                loss = nll_loss + output_reg
-            
-            # Compute Chamfer for monitoring
-            with torch.no_grad():
-                x_recon = model.decode(z, points.shape[1])
-                chamfer = compute_chamfer_distance(x_recon, points)
-                total_chamfer += chamfer
-            
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-            
-            total_loss += loss.item()
-            n_batches += 1
-            
-        except Exception as e:
-            print(f"Error in batch {batch_idx}: {e}")
-            continue
+        # Encode to latent
+        z = model.encode(points)
+        
+        # Forward pass through CNF
+        y, log_det = model.point_cnf(points, z, reverse=False)
+        
+        # Compute negative log-likelihood
+        log_py = torch.distributions.Normal(0, 1).log_prob(y)
+        log_py = log_py.view(points.shape[0], -1).sum(1, keepdim=True)
+        log_px = log_py + log_det.view(points.shape[0], -1).sum(1, keepdim=True)
+        
+        # Primary loss
+        nll_loss = -log_px.mean()
+        
+        # Add L2 regularization on CNF output
+        output_reg = 0.01 * (y ** 2).mean()
+        
+        # Two-stage training
+        if epoch < warmup_epochs:
+            # Stage 1: Only reconstruction loss
+            loss = nll_loss + output_reg
+        else:
+            # Stage 2: Add VAE regularization (simplified for now)
+            # TODO: Add proper prior and entropy losses when implementing stochastic encoder
+            loss = nll_loss + output_reg
+        
+        # Compute Chamfer for monitoring (decode doesn't need gradients)
+        x_recon = model.decode(z, points.shape[1])
+        chamfer = compute_chamfer_distance(x_recon, points)
+        total_chamfer += chamfer
+        
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+        
+        total_loss += loss.item()
+        n_batches += 1
             
         # Clear cache periodically
         if batch_idx % 10 == 0:
             torch.cuda.empty_cache()
     
+    if n_batches == 0:
+        return 0.0, 0.0
     return total_loss / n_batches, total_chamfer / n_batches
 
 
