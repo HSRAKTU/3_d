@@ -272,27 +272,27 @@ def main():
             n_points = num_points[0].item()
             target_np = points[0, :n_points].detach().cpu().numpy()
             recon_np = recon[0, :n_points].detach().cpu().numpy()
+            
+            # Plot
+            fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
                 
-                # Plot
-                fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
-                
-                ax1.scatter(target_np[:, 0], target_np[:, 1], alpha=0.5, s=1)
-                ax1.set_title(f'Original (Epoch {epoch+1})')
-                ax1.axis('equal')
-                
-                ax2.scatter(recon_np[:, 0], recon_np[:, 1], alpha=0.5, s=1, color='red')
-                ax2.set_title('Reconstructed')
-                ax2.axis('equal')
-                
-                ax3.scatter(target_np[:, 0], target_np[:, 1], alpha=0.5, s=1, label='Original')
-                ax3.scatter(recon_np[:, 0], recon_np[:, 1], alpha=0.5, s=1, color='red', label='Reconstructed')
-                ax3.set_title(f'Overlay (Chamfer: {avg_val_chamfer:.4f})')
-                ax3.axis('equal')
-                ax3.legend()
-                
-                plt.tight_layout()
-                plt.savefig(output_dir / f'epoch_{epoch+1:04d}.png', dpi=150, bbox_inches='tight')
-                plt.close()
+            ax1.scatter(target_np[:, 0], target_np[:, 1], alpha=0.5, s=1)
+            ax1.set_title(f'Original (Epoch {epoch+1})')
+            ax1.axis('equal')
+            
+            ax2.scatter(recon_np[:, 0], recon_np[:, 1], alpha=0.5, s=1, color='red')
+            ax2.set_title('Reconstructed')
+            ax2.axis('equal')
+            
+            ax3.scatter(target_np[:, 0], target_np[:, 1], alpha=0.5, s=1, label='Original')
+            ax3.scatter(recon_np[:, 0], recon_np[:, 1], alpha=0.5, s=1, color='red', label='Reconstructed')
+            ax3.set_title(f'Overlay (Chamfer: {avg_val_chamfer:.4f})')
+            ax3.axis('equal')
+            ax3.legend()
+            
+            plt.tight_layout()
+            plt.savefig(output_dir / f'epoch_{epoch+1:04d}.png', dpi=150, bbox_inches='tight')
+            plt.close()
         
         # Update learning rate
         scheduler.step()
