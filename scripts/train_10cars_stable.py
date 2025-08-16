@@ -34,7 +34,7 @@ LEARNING_RATE = 5e-4  # SAME as single slice
 MIN_LR = 1e-4  # SAME as single slice
 EPOCHS = 300  # More epochs with early stopping
 TARGET_CHAMFER = 0.1  # Less strict (multiple shapes)
-BATCH_SIZE = 32  # Increased from 8 (need variety)
+BATCH_SIZE = 8  # Reduced to prevent OOM with large slices
 GRADIENT_CLIP = 1.0  # SAME as single slice
 WEIGHT_DECAY = 1e-4  # SAME as single slice
 VAL_SPLIT = 0.1  # 10% validation
@@ -67,7 +67,7 @@ def main():
         data_directory="data/training_dataset",
         car_ids=selected_car_ids,  # Pass specific car IDs
         normalize=True,
-        max_points=None,  # Don't filter - keep ALL slices
+        max_points=2000,  # Limit to prevent OOM during gradient computation
         min_points=10
     )
     
@@ -182,6 +182,10 @@ def main():
                 # Record loss
                 train_losses.append(loss.item())
                 pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+                
+                # Clear gradients to save memory
+                if batch_idx % 10 == 0:
+                    torch.cuda.empty_cache()
         
         # Validation
         model.eval()
@@ -204,6 +208,9 @@ def main():
             
             val_loss = -log_px.mean() + 0.01 * (y ** 2).mean()
             val_losses.append(val_loss.item())
+            
+            # Detach to prevent memory accumulation
+            del y, log_det, log_py, log_px, val_loss
             
             # Compute Chamfer distance for first item in batch
             if len(val_chamfers) < 10:  # Sample a few
